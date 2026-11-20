@@ -32,7 +32,7 @@
 #define MAX_USER_PRESETS 64
 
 enum { DD_PRESET = 1, DD_OUT, DD_IN, DD_MIDI, DD_MOUT, DD_CH, DD_MOD = 20 };
-enum { TB_SAVE = 1 };
+enum { TB_SAVE = 1, TB_SEARCH };
 
 typedef struct {
     Engine *e;
@@ -48,8 +48,18 @@ typedef struct {
     char user_presets[MAX_USER_PRESETS][128];
     int  n_user, preset_active;
     char preset_name[64];
+    int  user_cat[MAX_USER_PRESETS];
     bool save_open;
     char save_name[64];
+    int  save_cat;
+
+    /* navegador de presets */
+    bool   browser_open;
+    int    br_cat;            /* -1 = todas */
+    char   br_search[48];
+    int    br_first;          /* primeira linha visível */
+    int    br_last_click;
+    double br_click_time;
 
     /* janela de áudio */
     bool audio_open;
@@ -228,6 +238,11 @@ static void build_preset_list(Gui *g)
         UnloadDirectoryFiles(fl);
     }
     qsort(g->user_presets, g->n_user, sizeof g->user_presets[0], cmp_str);
+    for (int i = 0; i < g->n_user; i++) {
+        char path[300];
+        snprintf(path, sizeof path, PRESET_DIR "/%s.txt", g->user_presets[i]);
+        g->user_cat[i] = preset_file_category(path);
+    }
     g->preset_items[0] = 0;
     for (int i = 0; i < factory_preset_count(); i++) append_item(g->preset_items, sizeof g->preset_items, factory_preset_name(i));
     for (int i = 0; i < g->n_user; i++) {
@@ -238,6 +253,26 @@ static void build_preset_list(Gui *g)
 }
 
 static int preset_total(Gui *g) { return factory_preset_count() + g->n_user; }
+
+static int preset_cat_of(Gui *g, int idx)
+{
+    int nf = factory_preset_count();
+    if (idx < 0) return 0;
+    return idx < nf ? factory_preset_category(idx) : g->user_cat[idx - nf];
+}
+
+static const char *preset_name_of(Gui *g, int idx)
+{
+    int nf = factory_preset_count();
+    return idx < nf ? factory_preset_name(idx) : g->user_presets[idx - nf];
+}
+
+static const char *preset_desc_of(Gui *g, int idx)
+{
+    (void)g;
+    int nf = factory_preset_count();
+    return idx < nf ? factory_preset_desc(idx) : "Preset seu, salvo na pasta presets/";
+}
 
 static void load_preset(Gui *g, int idx)
 {
@@ -274,7 +309,7 @@ static void save_preset(Gui *g, const char *name)
     MakeDirectory(PRESET_DIR);
     char path[300];
     snprintf(path, sizeof path, PRESET_DIR "/%s.txt", clean);
-    if (preset_save(path) == 0) {
+    if (preset_save(path, g->save_cat) == 0) {
         build_preset_list(g);
         for (int i = 0; i < g->n_user; i++)
             if (!strcmp(g->user_presets[i], clean)) g->preset_active = factory_preset_count() + i;
@@ -364,6 +399,9 @@ static void load_settings(Gui *g)
         else params_read_line(k, v);
     }
     fclose(f);
+    /* o índice muda quando entram presets novos: o nome é quem manda */
+    for (int i = 0; i < preset_total(g); i++)
+        if (!strcmp(preset_name_of(g, i), g->preset_name)) { g->preset_active = i; return; }
     if (g->preset_active < 0 || g->preset_active >= preset_total(g)) g->preset_active = 0;
 }
 
@@ -419,7 +457,7 @@ static const struct { int key, semi; } KEYMAP[] = {
 static void handle_keyboard(Gui *g)
 {
     Engine *e = g->e;
-    if (ui_typing() || g->save_open || g->audio_open) return; /* digitando ou numa janela: as teclas não tocam */
+    if (ui_typing() || g->save_open || g->audio_open || g->browser_open) return; /* digitando ou numa janela: as teclas não tocam */
     int base = 12 * (param_geti(P_KEYS_OCTAVE) + 1);
     for (int i = 0; i < NKEYS; i++) {
         if (IsKeyPressed(KEYMAP[i].key)) {
@@ -630,12 +668,7 @@ static void draw_logo(float x, float y)
     draw_polyline(p, 24, 2.2f, C_AMBER);
 }
 
-static const char *preset_category(int idx)
-{
-    static const char *cat[] = {"INIT", "LEAD", "PAD", "BAIXO", "ÓRGÃO", "PLUCK", "ARPEJO"};
-    if (idx < (int)(sizeof cat / sizeof cat[0])) return cat[idx];
-    return "MEU";
-}
+static void open_browser(Gui *g);
 
 static void draw_top_bar(Gui *g)
 {
@@ -655,19 +688,27 @@ static void draw_top_bar(Gui *g)
     ui_tooltip((Rectangle){grp.x + 1, grp.y + 1, 34, 34}, "Preset anterior");
     ui_tooltip((Rectangle){grp.x + grp.width - 35, grp.y + 1, 34, 34}, "Próximo preset");
     Rectangle mid = {grp.x + 36, grp.y + 1, grp.width - 72, 34};
-    const char *cat = preset_category(g->preset_active);
+    const char *cat = preset_cat_tag(preset_cat_of(g, g->preset_active));
     float cw = ui_text_width(cat, 10, UI_BOLD) + 12;
-    if (ui_dropdown(mid, g->preset_items, &g->preset_active, DD_PRESET)) load_preset(g, g->preset_active);
-    /* desenha a etiqueta e o nome por cima da lista fechada */
-    ui_rect((Rectangle){mid.x + 2, mid.y + 2, mid.width - 30, mid.height - 4}, 8, ui_hover(mid) ? C_CTRL_HOV : C_CTRL);
+    if (ui_clicked(mid)) {
+        g->browser_open = !g->browser_open;
+        if (g->browser_open) open_browser(g);
+    }
+    bool hov = ui_hover(mid) || g->browser_open;
+    ui_rect((Rectangle){mid.x + 1, mid.y + 1, mid.width - 2, mid.height - 2}, 8, hov ? C_CTRL_HOV : C_CTRL);
     Rectangle tag = {mid.x + 10, mid.y + 9, cw, 17};
     ui_rect(tag, 5, C_AMBER_BG);
     ui_text_center(cat, tag, 10, UI_BOLD, C_AMBER);
     ui_text(g->preset_name, tag.x + cw + 8, mid.y + 9, 13, UI_SEMIBOLD, C_TEXT);
+    ui_icon(g->browser_open ? "chev-up" : "chev-down", mid.x + mid.width - 24, mid.y + 10, 14, C_TEXT2);
+    ui_tooltip(mid, "Abre a lista de presets, separada por categoria.");
 
     if (ui_button((Rectangle){542, 10, 92, 36}, "@save Salvar", UI_BTN_NORMAL)) {
         g->save_open = !g->save_open;
         g->save_name[0] = 0; /* vazio: Enter salva com o nome atual */
+        g->save_cat = preset_cat_of(g, g->preset_active);
+        if (g->save_cat == 0) g->save_cat = PRESET_CAT_USER;
+        g->browser_open = false;
         if (g->save_open) ui_focus(TB_SAVE);
     }
     ui_tooltip((Rectangle){542, 10, 92, 36}, "Salva o som atual como um preset seu (pasta presets/).");
@@ -735,7 +776,10 @@ static void draw_top_bar(Gui *g)
     x -= 124 + 8;
 
     Rectangle ab = {x - 36, 10, 36, 36};
-    if (ui_button(ab, "@gear", g->audio_open ? UI_BTN_CYAN : UI_BTN_NORMAL)) g->audio_open = !g->audio_open;
+    if (ui_button(ab, "@gear", g->audio_open ? UI_BTN_CYAN : UI_BTN_NORMAL)) {
+        g->audio_open = !g->audio_open;
+        g->browser_open = false;
+    }
     ui_tooltip(ab, "Configurações de áudio: saída, buffer e latência.");
 }
 
@@ -956,6 +1000,7 @@ static void draw_input_panel(Gui *g)
     bool ok = g->e->dev_ok && (mode != 1 || midi_is_open());
     ui_led(p.x + p.width - 84, p.y + 21, 3.5f, ok, C_GREEN);
     ui_text(ok ? "conectada" : "sem sinal", p.x + p.width - 74, p.y + 14, 11, UI_REGULAR, C_TEXT2);
+    ui_tooltip((Rectangle){p.x + 14, p.y + 40, p.width - 28, 38}, "Como você vai tocar: teclado do computador, teclado MIDI ou guitarra/instrumento pela interface de áudio.");
     if (ui_segmented((Rectangle){p.x + 14, p.y + 40, p.width - 28, 38}, "Teclado;MIDI;Guitarra", &mode, C_CYAN, C_CYAN_BG, C_CYAN_HI))
         param_set(P_INPUT_MODE, (float)mode);
     if (mode == 0) input_keys(g, p);
@@ -1216,6 +1261,9 @@ static void tab_modulation(Gui *g)
         vals[i][0] = param_geti(P_MOD_SRC(i));
         vals[i][1] = param_geti(P_MOD_VIA(i));
         vals[i][2] = param_geti(P_MOD_DST(i));
+        ui_tooltip((Rectangle){cols[0], y + 8, 200, 34}, param_help(P_MOD_SRC(i)));
+        ui_tooltip((Rectangle){cols[1], y + 8, 200, 34}, param_help(P_MOD_VIA(i)));
+        ui_tooltip((Rectangle){cols[2], y + 8, 220, 34}, param_help(P_MOD_DST(i)));
         if (ui_dropdown((Rectangle){cols[0], y + 8, 200, 34}, SRC, &vals[i][0], DD_MOD + i * 3)) param_set(P_MOD_SRC(i), (float)vals[i][0]);
         if (ui_dropdown((Rectangle){cols[1], y + 8, 200, 34}, SRC, &vals[i][1], DD_MOD + i * 3 + 1)) param_set(P_MOD_VIA(i), (float)vals[i][1]);
         if (ui_dropdown((Rectangle){cols[2], y + 8, 220, 34}, DST, &vals[i][2], DD_MOD + i * 3 + 2)) param_set(P_MOD_DST(i), (float)vals[i][2]);
@@ -1261,6 +1309,7 @@ static void tempo_card(Gui *g, Rectangle r)
     ui_tooltip(bpmhit, "Andamento. Use a roda do mouse, os botões ou o Tap.");
     Rectangle tap = wide ? (Rectangle){st.x + st.width + 10, st.y, r.width - st.width - 38, 56}
                          : (Rectangle){r.x + 14, st.y + st.height + 8, r.width - 28, 38};
+    ui_tooltip(tap, "Clique no ritmo da música (4 vezes ou mais) para acertar o BPM.");
     if (ui_button(tap, "@tap Tap", UI_BTN_AMBER)) {
         double now = GetTime();
         if (g->ntaps > 0 && now - g->taps[(g->ntaps - 1) % 4] > 2.0) g->ntaps = 0;
@@ -1316,6 +1365,7 @@ static void tab_arp(Gui *g)
     }
     ui_text("Modo", a.x + 14, a.y + 144, 11, UI_REGULAR, C_TEXT2);
     int m = param_geti(P_ARP_MODE);
+    ui_tooltip((Rectangle){a.x + 14, a.y + 162, a.width - 28, 70}, param_help(P_ARP_MODE));
     if (ui_pills((Rectangle){a.x + 14, a.y + 162, a.width - 28, 70}, 3, 32, "Sobe;Desce;Sobe-desce;Aleatório;Como tocado", &m, false)) param_set(P_ARP_MODE, (float)m);
     ui_text("Divisão", a.x + 14, a.y + 244, 11, UI_REGULAR, C_TEXT2);
     int d = param_geti(P_ARP_RATE);
@@ -1353,6 +1403,7 @@ static void tab_arp(Gui *g)
     }
     ui_text("Intervalo", h.x + 14, h.y + 144, 11, UI_REGULAR, C_TEXT2);
     int iv = param_geti(P_HARM_INTERVAL);
+    ui_tooltip((Rectangle){h.x + 14, h.y + 162, h.width - 28, 66}, param_help(P_HARM_INTERVAL));
     if (ui_pills((Rectangle){h.x + 14, h.y + 162, h.width - 28, 66}, 4, 30, "Terça ↑;Quarta ↑;Quinta ↑;Sexta ↑;Oitava ↑;Terça ↓;Oitava ↓;Acorde", &iv, true))
         param_set(P_HARM_INTERVAL, (float)iv);
     ui_text("Tom", h.x + 14, h.y + 240, 11, UI_REGULAR, C_TEXT2);
@@ -1364,6 +1415,7 @@ static void tab_arp(Gui *g)
     ui_tooltip((Rectangle){h.x + 14, h.y + 352, 196, 34}, "Maior/Menor: segue a escala do tom. Fixo: sempre o mesmo intervalo em semitons.");
     int ap = param_geti(P_HARM_SRC);
     ui_text("Aplicar em", h.x + 14, h.y + 394, 11, UI_REGULAR, C_TEXT2);
+    ui_tooltip((Rectangle){h.x + 14, h.y + 410, 196, 30}, param_help(P_HARM_SRC));
     if (ui_segmented((Rectangle){h.x + 14, h.y + 410, 196, 30}, "Só guitarra;Tudo", &ap, C_CYAN, C_CYAN_BG, C_CYAN_HI)) param_set(P_HARM_SRC, (float)ap);
     ui_knob(h.x + h.width - 66, h.y + 378, 46, P_HARM_LEVEL, C_CYAN, "Volume");
 
@@ -1435,6 +1487,7 @@ static void tab_midi_out(Gui *g)
     ui_tooltip((Rectangle){x, c.y + 60, w, 38}, "Guitarra: só a nota tocada, com bends. Tudo: também teclado, MIDI, harmonia e arpejo.");
     ui_text("Destino", x, c.y + 112, 11, UI_REGULAR, C_TEXT2);
     if (ui_dropdown((Rectangle){x, c.y + 130, w - 44, 34}, g->mout_items, &g->mout_active, DD_MOUT)) apply_midi_out(g);
+    ui_tooltip((Rectangle){x + w - 38, c.y + 130, 38, 34}, "Procura de novo os dispositivos (depois de ligar um cabo ou uma interface).");
     if (ui_button((Rectangle){x + w - 38, c.y + 130, 38, 34}, "@refresh", UI_BTN_NORMAL)) refresh_all_devices(g);
     bool open = midi_out_is_open();
     char st[200];
@@ -1483,7 +1536,8 @@ static void tab_midi_out(Gui *g)
 /* ------------------------------------------------------------------ */
 /* Janelas por cima                                                    */
 /* ------------------------------------------------------------------ */
-static Rectangle save_rect(void) { return (Rectangle){470, 54, 300, 128}; }
+static Rectangle save_rect(void) { return (Rectangle){430, 54, 380, 214}; }
+static Rectangle browser_rect(void) { return (Rectangle){212, 54, 760, 512}; }
 static Rectangle audio_rect(void) { return (Rectangle){UI_W / 2 - 280, 96, 560, 520}; }
 
 static int cmp_float(const void *a, const void *b) { float x = *(const float *)a, y = *(const float *)b; return (x > y) - (x < y); }
@@ -1524,16 +1578,171 @@ static void draw_save_popup(Gui *g)
     ui_panel(r, 12, (Color){27, 31, 39, 255}, C_BORDER2);
     ui_caption("SALVAR PRESET", r.x + 16, r.y + 14, C_TEXT2);
     bool enter = ui_textbox((Rectangle){r.x + 16, r.y + 38, r.width - 32, 34}, g->save_name, 48, TB_SAVE, g->preset_name);
-    if (ui_button((Rectangle){r.x + r.width - 112, r.y + 82, 96, 32}, "Salvar", UI_BTN_AMBER) || enter) {
+    ui_text("Categoria", r.x + 16, r.y + 84, 12, UI_SEMIBOLD, C_TEXT2);
+    int pc = g->save_cat - 1;
+    if (ui_pills((Rectangle){r.x + 16, r.y + 104, r.width - 32, 60}, 4, 28, "Lead;Pad;Baixo;Teclas;Pluck;Arpejo;Guitarra;Meus", &pc, false))
+        g->save_cat = pc + 1;
+    if (!ui_typing() && (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER))) enter = true;
+    if (!ui_typing() && !IsMouseButtonDown(MOUSE_BUTTON_LEFT)) ui_focus(TB_SAVE); /* o campo volta a receber as teclas */
+    if (ui_button((Rectangle){r.x + r.width - 112, r.y + 170, 96, 32}, "Salvar", UI_BTN_AMBER) || enter) {
         save_preset(g, g->save_name[0] ? g->save_name : g->preset_name);
         g->save_open = false;
         ui_focus(0);
     }
-    if (ui_button((Rectangle){r.x + r.width - 216, r.y + 82, 96, 32}, "Cancelar", UI_BTN_GHOST) || ui_pressed_outside(r) ||
+    if (ui_button((Rectangle){r.x + r.width - 216, r.y + 170, 96, 32}, "Cancelar", UI_BTN_GHOST) || ui_pressed_outside(r) ||
         (IsKeyPressed(KEY_ESCAPE) && !ui_typing())) {
         g->save_open = false;
         ui_focus(0);
     }
+}
+
+/* ------------------------------------------------------------------ */
+/* Navegador de presets                                                */
+/* ------------------------------------------------------------------ */
+static void lower_ascii(char *d, const char *s, int cap)
+{
+    int i = 0;
+    for (; s[i] && i < cap - 1; i++) d[i] = (s[i] >= 'A' && s[i] <= 'Z') ? s[i] + 32 : s[i];
+    d[i] = 0;
+}
+
+static bool browser_match(Gui *g, int idx, int cat)
+{
+    if (cat >= 0 && preset_cat_of(g, idx) != cat) return false;
+    if (!g->br_search[0]) return true;
+    char q[48], a[160], b[200];
+    lower_ascii(q, g->br_search, sizeof q);
+    lower_ascii(a, preset_name_of(g, idx), sizeof a);
+    lower_ascii(b, preset_desc_of(g, idx), sizeof b);
+    return strstr(a, q) || strstr(b, q);
+}
+
+static int browser_list(Gui *g, int *out)
+{
+    int n = 0;
+    for (int i = 0; i < preset_total(g); i++)
+        if (browser_match(g, i, g->br_cat)) out[n++] = i;
+    return n;
+}
+
+#define BR_ROW 54
+#define BR_ROWS 7
+
+static void browser_scroll_to(Gui *g, int pos)
+{
+    if (pos < g->br_first) g->br_first = pos;
+    if (pos >= g->br_first + BR_ROWS) g->br_first = pos - BR_ROWS + 1;
+}
+
+static void open_browser(Gui *g)
+{
+    g->br_cat = -1;
+    g->br_search[0] = 0;
+    g->br_first = 0;
+    g->br_last_click = -1;
+    browser_scroll_to(g, g->preset_active);
+    g->save_open = false;
+}
+
+static void draw_preset_browser(Gui *g)
+{
+    Rectangle r = browser_rect();
+    ui_shadow(r, 14);
+    ui_panel(r, 14, (Color){24, 28, 35, 255}, C_BORDER2);
+    ui_caption("PRESETS", r.x + 20, r.y + 20, C_TEXT2);
+    if (ui_button_icon((Rectangle){r.x + r.width - 44, r.y + 10, 32, 32}, "x", "Fechar")) g->browser_open = false;
+    Rectangle sb = {r.x + r.width - 300, r.y + 10, 248, 32};
+    if (ui_textbox(sb, g->br_search, 40, TB_SEARCH, "Buscar por nome ou som...")) g->br_first = 0;
+    ui_tooltip(sb, "Procura no nome e na descrição. Ex.: \"delay\", \"baixo\", \"vibrato\".");
+
+    int all[256];
+    int n = browser_list(g, all);
+
+    /* categorias à esquerda */
+    float cx = r.x + 12, cy = r.y + 54, cwid = 168;
+    DrawRectangle((int)(r.x + 192), (int)r.y + 52, 1, (int)r.height - 96, C_BORDER);
+    for (int c = -1; c < PRESET_CAT_COUNT; c++) {
+        int cnt = 0;
+        for (int i = 0; i < preset_total(g); i++)
+            if (browser_match(g, i, c)) cnt++;
+        Rectangle row = {cx, cy, cwid, 34};
+        bool sel = g->br_cat == c, hov = ui_hover(row);
+        if (sel || hov) ui_rect(row, 8, sel ? C_AMBER_BG : C_CTRL);
+        ui_text(c < 0 ? "Todas" : preset_cat_name(c), row.x + 12, row.y + 9, 13, sel ? UI_SEMIBOLD : UI_REGULAR,
+                sel ? C_AMBER : (cnt ? C_TEXT : C_TEXT2));
+        char t[16];
+        snprintf(t, sizeof t, "%d", cnt);
+        float tw = ui_text_width(t, 11.5f, UI_SEMIBOLD);
+        ui_text(t, row.x + row.width - 12 - tw, row.y + 10, 11.5f, UI_SEMIBOLD, sel ? C_AMBER : C_TEXT2);
+        if (ui_clicked(row)) { g->br_cat = c; g->br_first = 0; }
+        if (c == PRESET_CAT_USER) ui_tooltip(row, "Os presets que você salvou com o botão Salvar.");
+        cy += 36;
+    }
+
+    /* lista à direita */
+    Rectangle lr = {r.x + 206, r.y + 54, r.width - 220, BR_ROWS * BR_ROW};
+    if (ui_hover(lr)) g->br_first -= (int)GetMouseWheelMove();
+    if (g->br_first > n - BR_ROWS) g->br_first = n - BR_ROWS;
+    if (g->br_first < 0) g->br_first = 0;
+
+    /* teclado: ↑ ↓ trocam de preset dentro da lista, Enter/Esc fecham */
+    int pos = -1;
+    for (int i = 0; i < n; i++)
+        if (all[i] == g->preset_active) pos = i;
+    int step = (IsKeyPressed(KEY_DOWN) || IsKeyPressedRepeat(KEY_DOWN)) - (IsKeyPressed(KEY_UP) || IsKeyPressedRepeat(KEY_UP));
+    if (step && n > 0) {
+        int np = pos < 0 ? 0 : (pos + step + n) % n;
+        load_preset(g, all[np]);
+        browser_scroll_to(g, np);
+    }
+
+    if (n == 0) {
+        ui_text("Nenhum preset encontrado.", lr.x + 12, lr.y + 14, 13, UI_SEMIBOLD, C_TEXT2);
+        if (g->br_cat == PRESET_CAT_USER && !g->br_search[0])
+            ui_text("Ajuste um som e clique em Salvar, na barra de cima, para ele aparecer aqui.", lr.x + 12, lr.y + 36, 12,
+                    UI_REGULAR, C_TEXT2);
+    }
+    for (int k = 0; k < BR_ROWS && g->br_first + k < n; k++) {
+        int i = all[g->br_first + k];
+        Rectangle row = {lr.x, lr.y + k * BR_ROW, lr.width - 14, BR_ROW - 4};
+        bool act = i == g->preset_active, hov = ui_hover(row);
+        ui_rect(row, 9, act ? (Color){42, 36, 24, 255} : (hov ? C_CTRL_HOV : C_CTRL));
+        if (act) ui_rect_lines(row, 9, 1, C_AMBER);
+        const char *tg = preset_cat_tag(preset_cat_of(g, i));
+        float tw = ui_text_width(tg, 9.5f, UI_BOLD) + 10;
+        Rectangle tag = {row.x + 12, row.y + 9, tw, 16};
+        ui_rect(tag, 4, act ? C_AMBER_BG : (Color){40, 46, 56, 255});
+        ui_text_center(tg, tag, 9.5f, UI_BOLD, act ? C_AMBER : C_TEXT2);
+        ui_text(preset_name_of(g, i), tag.x + tw + 8, row.y + 7, 13.5f, UI_SEMIBOLD, act ? C_AMBER_HI : C_TEXT);
+        ui_text(preset_desc_of(g, i), row.x + 12, row.y + 29, 11.5f, UI_REGULAR, C_TEXT2);
+        if (act) ui_icon("play", row.x + row.width - 26, row.y + 17, 14, C_AMBER);
+        if (ui_clicked(row)) {
+            double now = GetTime();
+            if (g->br_last_click == i && now - g->br_click_time < 0.4) g->browser_open = false;
+            else load_preset(g, i);
+            g->br_last_click = i;
+            g->br_click_time = now;
+        }
+    }
+    /* barra de rolagem */
+    if (n > BR_ROWS) {
+        float th = lr.height * BR_ROWS / n, ty = lr.y + (lr.height - th) * g->br_first / (float)(n - BR_ROWS);
+        ui_rect((Rectangle){lr.x + lr.width - 6, lr.y, 4, lr.height}, 2, (Color){32, 37, 45, 255});
+        ui_rect((Rectangle){lr.x + lr.width - 6, ty, 4, th}, 2, C_TEXT2);
+    }
+
+    DrawRectangle((int)r.x + 1, (int)(r.y + r.height - 44), (int)r.width - 2, 1, C_BORDER);
+    ui_text("Clique para ouvir  ·  duplo clique ou Enter fecha  ·  setas para cima e para baixo trocam de preset", r.x + 20,
+            r.y + r.height - 30, 12, UI_REGULAR, C_TEXT2);
+
+    if ((IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER)) && !ui_typing()) g->browser_open = false;
+    if (IsKeyPressed(KEY_ESCAPE) && !ui_typing()) g->browser_open = false;
+    if (ui_pressed_outside(r)) {
+        /* clicar no próprio seletor fecha pelo botão; fora dele, fecha aqui */
+        Rectangle sel = {248, 11, 248, 34};
+        if (!CheckCollisionPointRec(ui_mouse(), sel)) g->browser_open = false;
+    }
+    if (!g->browser_open) ui_focus(0);
 }
 
 static void draw_audio_dialog(Gui *g)
@@ -1547,6 +1756,7 @@ static void draw_audio_dialog(Gui *g)
     float x = r.x + 20, w = r.width - 40;
     ui_text("Saída de áudio", x, r.y + 52, 11, UI_REGULAR, C_TEXT2);
     if (ui_dropdown((Rectangle){x, r.y + 70, w - 44, 34}, g->out_items, &g->out_active, DD_OUT)) apply_audio(g);
+    ui_tooltip((Rectangle){x + w - 38, r.y + 70, 38, 34}, "Procura de novo as saídas de áudio e reabre o som.");
     if (ui_button((Rectangle){x + w - 38, r.y + 70, 38, 34}, "@refresh", UI_BTN_NORMAL)) { build_device_lists(g); apply_audio(g); }
     char t[160];
     if (g->e->dev_ok) snprintf(t, sizeof t, "Funcionando: %u Hz · buffer de %.1f ms%s", g->e->dev_rate, g->e->dev_latency_ms,
@@ -1561,6 +1771,7 @@ static void draw_audio_dialog(Gui *g)
     static const int sizes[4] = {64, 128, 256, 512};
     int cur = g->e->period_frames > 0 ? g->e->period_frames : FRAMES_PER_BUFFER, sel = 1;
     for (int i = 0; i < 4; i++) if (sizes[i] == cur) sel = i;
+    ui_tooltip((Rectangle){x, r.y + 180, w, 38}, "Quantas amostras o som processa de cada vez. Menor = menos atraso, mas exige mais do computador.");
     if (ui_segmented((Rectangle){x, r.y + 180, w, 38}, "64 · 1,3 ms;128 · 2,7 ms;256 · 5,3 ms;512 · 10,7 ms", &sel, C_CYAN, C_CYAN_BG, C_CYAN_HI)) {
         g->e->period_frames = sizes[sel];
         apply_audio(g);
@@ -1575,6 +1786,7 @@ static void draw_audio_dialog(Gui *g)
     bool ex = g->e->exclusive;
     ui_text("Modo exclusivo (WASAPI)", x, r.y + 262, 12.5f, UI_SEMIBOLD, C_TEXT);
     ui_text("Menos atraso no Windows; outros programas ficam sem som.", x, r.y + 282, 12, UI_REGULAR, C_TEXT2);
+    ui_tooltip((Rectangle){x + w - 44, r.y + 264, 44, 24}, "Usa a placa de som só para este programa (WASAPI exclusivo): menos atraso, mas os outros programas ficam mudos.");
     if (ui_switch((Rectangle){x + w - 44, r.y + 264, 44, 24}, &ex, C_CYAN)) {
         g->e->exclusive = ex;
         apply_audio(g);
@@ -1594,6 +1806,7 @@ static void draw_audio_dialog(Gui *g)
     char bl[40];
     if (g->lat_running) snprintf(bl, sizeof bl, "Medindo %d/5...", g->lat_runs + 1);
     else snprintf(bl, sizeof bl, "@play Medir");
+    ui_tooltip(mb, "Toca 5 cliques e mede quanto tempo cada um leva para voltar pela entrada.");
     if (ui_button(mb, bl, UI_BTN_CYAN) && !g->lat_running) {
         if (param_geti(P_INPUT_MODE) != 2 || engine_capture_channels(g->e) == 0) {
             set_status(g, "Para medir, escolha a entrada Guitarra (o programa precisa ouvir a entrada).");
@@ -1728,6 +1941,7 @@ int gui_run(Engine *e, const GuiOptions *opt)
         /* janelas por cima bloqueiam o resto */
         if (g->audio_open) ui_set_modal(true, audio_rect());
         else if (g->save_open) ui_set_modal(true, save_rect());
+        else if (g->browser_open) ui_set_modal(true, browser_rect());
         else ui_set_modal(false, (Rectangle){0});
 
         ui_begin_frame(C_BG);
@@ -1747,6 +1961,7 @@ int gui_run(Engine *e, const GuiOptions *opt)
         draw_status_bar(g);
         ui_modal_content();
         if (g->save_open) draw_save_popup(g);
+        if (g->browser_open) draw_preset_browser(g);
         if (g->audio_open) draw_audio_dialog(g);
         ui_end_frame();
 

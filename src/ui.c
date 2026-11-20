@@ -256,6 +256,7 @@ void ui_icon(const char *n, float x, float y, float s, Color c)
     float t = fmaxf(1.4f, s * 0.11f), k = s / 14.0f;
 #define L(a, b, cc, d) line(x + (a) * k, y + (b) * k, x + (cc) * k, y + (d) * k, t, c)
     if (!strcmp(n, "chev-down"))       { L(3.5f, 5, 7, 8.5f); L(7, 8.5f, 10.5f, 5); }
+    else if (!strcmp(n, "chev-up"))    { L(3.5f, 8.5f, 7, 5); L(7, 5, 10.5f, 8.5f); }
     else if (!strcmp(n, "chev-left"))  { L(9, 2.5f, 4.5f, 7); L(4.5f, 7, 9, 11.5f); }
     else if (!strcmp(n, "chev-right")) { L(5, 2.5f, 9.5f, 7); L(9.5f, 7, 5, 11.5f); }
     else if (!strcmp(n, "x"))          { L(3.5f, 3.5f, 10.5f, 10.5f); L(10.5f, 3.5f, 3.5f, 10.5f); }
@@ -402,6 +403,7 @@ bool ui_button(Rectangle r, const char *text, UiButtonStyle style)
 
 bool ui_button_icon(Rectangle r, const char *icon, const char *aria)
 {
+    ui_tooltip(r, aria);
     (void)aria;
     bool hov = ui_hover(r);
     if (hov) { U.want_hand = true; ui_rect(r, 8, C_CTRL_HOV); }
@@ -654,6 +656,7 @@ static bool knob_core(float cx, float cy, float size, int param, Color accent, c
             changed = true;
         }
     }
+    if (!U.learn) ui_tooltip(hit, param_help(param));
     bool lit = hov || U.active == id;
     ui_knob_draw(cx, cy, size, param_get_norm(param), lit ? ColorBrightness(accent, 0.15f) : accent, bipolar);
     char val[32];
@@ -688,6 +691,7 @@ bool ui_param_switch(Rectangle r, int param, Color accent)
 {
     if (U.learn) ui_learn_zone((Rectangle){r.x - 3, r.y - 3, 50, r.height + 6}, param);
     bool on = param_geti(param);
+    if (!U.learn) ui_tooltip(r, param_help(param));
     if (!U.learn && ui_switch(r, &on, accent)) { param_set(param, on); return true; }
     if (U.learn) ui_switch(r, &on, accent); /* só desenha */
     return false;

@@ -93,9 +93,20 @@ void params_write_all(FILE *f);
 int  params_read_line(const char *key, const char *value);
 
 /* Presets: arquivos de texto "chave = valor" */
-int         preset_save(const char *path);
+int         preset_save(const char *path, int category);
 int         preset_load(const char *path);
+/* Categorias: 0 Inicial, 1 Lead, 2 Pad, 3 Baixo, 4 Teclas, 5 Pluck,
+   6 Arpejo, 7 Guitarra, 8 Meus (preset do usuário sem categoria) */
+enum { PRESET_CAT_USER = 8, PRESET_CAT_COUNT = 9 };
+const char *param_help(int id); /* dica do controle, ou NULL */
+const char *preset_cat_name(int c); /* "Pad" */
+const char *preset_cat_tag(int c);  /* "PAD" */
+int         preset_cat_find(const char *name);
+int         preset_file_category(const char *path);
+
 int         factory_preset_count(void);
+int         factory_preset_category(int i);
+const char *factory_preset_desc(int i);
 const char *factory_preset_name(int i);
 void        factory_preset_apply(int i);
 

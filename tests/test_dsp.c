@@ -612,7 +612,7 @@ static void test_presets(void)
     factory_preset_apply(1);
     float cut = param_get(P_CUTOFF), drive = param_get(P_DIST_DRIVE);
     param_set(P_MASTER, 0.33f); /* não faz parte do preset */
-    CHECK(preset_save("/tmp/teste_preset.txt") == 0, "não salvou");
+    CHECK(preset_save("/tmp/teste_preset.txt", 2) == 0, "não salvou");
     params_init();
     param_set(P_MASTER, 0.66f);
     CHECK(preset_load("/tmp/teste_preset.txt") == 0, "não carregou");
