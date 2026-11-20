@@ -1,0 +1,14 @@
+Virtual Synth para Linux (x86_64)
+=================================
+
+1. Descompacte a pasta onde quiser.
+2. Dê dois cliques em VirtualSynth (ou rode ./VirtualSynth).
+   Se o gerenciador de arquivos não abrir, clique com o botão direito >
+   Propriedades > Permissões > "Permitir executar como programa".
+
+Os presets e configurações ficam nesta mesma pasta.
+Precisa de um desktop com X11 ou XWayland e OpenGL (o padrão no Ubuntu,
+Fedora, Mint etc.).
+
+Código-fonte e ajuda: https://github.com/vDonasan/VSynth
+Licença: GPLv3 (arquivo LICENSE).

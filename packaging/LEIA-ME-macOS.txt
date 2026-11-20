@@ -1,0 +1,16 @@
+Virtual Synth para macOS
+========================
+
+1. Arraste "Virtual Synth" para a pasta Aplicativos.
+2. Na primeira vez, clique com o botão direito no app > Abrir > Abrir.
+   (O app não é assinado pela Apple; abrir com dois cliques mostra um aviso.)
+   Se ainda assim o macOS bloquear: Ajustes do Sistema > Privacidade e
+   Segurança > "Abrir Mesmo Assim".
+3. Para usar guitarra ou microfone, permita o acesso ao microfone quando
+   o macOS pedir.
+
+Presets e configurações ficam em
+~/Library/Application Support/Virtual Synth
+
+Código-fonte e ajuda: https://github.com/vDonasan/VSynth
+Licença: GPLv3 (arquivo LICENSE).

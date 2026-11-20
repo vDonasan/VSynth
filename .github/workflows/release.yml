@@ -1,0 +1,156 @@
+# Compila o Virtual Synth para Windows, Linux e macOS e publica os
+# arquivos prontos para baixar na página de Releases do GitHub.
+#
+# - Ao enviar uma etiqueta de versão (git tag v1.2.0 && git push --tags):
+#   compila, testa e cria a Release com os três downloads.
+# - Em qualquer push na main: só compila e testa (os arquivos ficam como
+#   "artifacts" da execução, sem Release).
+name: Compilar e publicar
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write # necessário para criar a Release
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04 # glibc mais antiga: o binário roda em mais distribuições
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependências
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libasound2-dev libx11-dev libxrandr-dev \
+            libxinerama-dev libxcursor-dev libxi-dev libgl1-mesa-dev
+      - name: Compilar
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j
+      - name: Testes
+        run: ./build/test_dsp && ./build/test_midi_out
+      - name: Empacotar
+        run: |
+          mkdir -p VirtualSynth-Linux
+          cp build/synth VirtualSynth-Linux/VirtualSynth
+          strip VirtualSynth-Linux/VirtualSynth
+          cp LICENSE VirtualSynth-Linux/
+          cp packaging/LEIA-ME-Linux.txt VirtualSynth-Linux/LEIA-ME.txt
+          tar czf VirtualSynth-Linux.tar.gz VirtualSynth-Linux
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VirtualSynth-Linux
+          path: VirtualSynth-Linux.tar.gz
+
+  windows:
+    # Compilação cruzada com MinGW-w64 (o .exe sai sem DLLs extras), com ASIO
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependências
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake mingw-w64 zip
+      - name: Compilar
+        run: |
+          cmake -B build-win -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-w64.cmake -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-win -j
+      - name: Conferir que não depende de DLLs fora do Windows
+        run: |
+          x86_64-w64-mingw32-objdump -p build-win/synth.exe | grep "DLL Name" | tee dlls.txt
+          ! grep -viE "kernel32|user32|gdi32|shell32|advapi32|ole32|oleaut32|winmm|msvcrt|ws2_32|opengl32|comdlg32|setupapi|uuid|imm32|version" dlls.txt
+      - name: Empacotar
+        run: |
+          mkdir -p VirtualSynth-Windows
+          cp build-win/synth.exe VirtualSynth-Windows/VirtualSynth.exe
+          x86_64-w64-mingw32-strip VirtualSynth-Windows/VirtualSynth.exe
+          cp LICENSE VirtualSynth-Windows/LICENSE.txt
+          cp packaging/LEIA-ME-Windows.txt VirtualSynth-Windows/LEIA-ME.txt
+          zip -r VirtualSynth-Windows.zip VirtualSynth-Windows
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VirtualSynth-Windows
+          path: VirtualSynth-Windows.zip
+
+  windows-tests:
+    # Os testes rodam num Windows de verdade
+    needs: windows
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          install: mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake make git
+      - name: Compilar e testar
+        run: |
+          cmake -B build -G "MSYS Makefiles" -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j --target test_dsp test_midi_out
+          ./build/test_dsp.exe && ./build/test_midi_out.exe
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compilar (Apple Silicon e Intel no mesmo app)
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+                -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+          cmake --build build -j
+      - name: Testes
+        run: ./build/test_dsp && ./build/test_midi_out
+      - name: Montar o app
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          case "$VERSION" in [0-9]*) ;; *) VERSION=0.0.0;; esac
+          APP="Virtual Synth.app"
+          mkdir -p "$APP/Contents/MacOS"
+          cp build/synth "$APP/Contents/MacOS/VirtualSynth"
+          sed "s/@VERSION@/$VERSION/g" packaging/Info.plist > "$APP/Contents/Info.plist"
+          codesign --force --deep --sign - "$APP" # assinatura local: o macOS exige alguma no Apple Silicon
+          mkdir -p VirtualSynth-macOS
+          mv "$APP" VirtualSynth-macOS/
+          cp LICENSE VirtualSynth-macOS/
+          cp packaging/LEIA-ME-macOS.txt VirtualSynth-macOS/LEIA-ME.txt
+          ditto -c -k --keepParent VirtualSynth-macOS VirtualSynth-macOS.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VirtualSynth-macOS
+          path: VirtualSynth-macOS.zip
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, windows, windows-tests, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - name: Publicar a Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Virtual Synth ${{ github.ref_name }}
+          generate_release_notes: true
+          body: |
+            ## Baixar
+
+            | Sistema | Arquivo |
+            |---|---|
+            | **Windows** 10/11 (64 bits) | `VirtualSynth-Windows.zip` |
+            | **macOS** 11 ou mais novo (Apple Silicon e Intel) | `VirtualSynth-macOS.zip` |
+            | **Linux** x86_64 | `VirtualSynth-Linux.tar.gz` |
+
+            Descompacte e abra o programa; cada pacote tem um `LEIA-ME.txt`
+            com os detalhes (avisos de segurança do Windows e do macOS na
+            primeira vez, permissão de microfone etc.).
+          files: |
+            VirtualSynth-Windows.zip
+            VirtualSynth-macOS.zip
+            VirtualSynth-Linux.tar.gz

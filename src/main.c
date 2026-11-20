@@ -14,6 +14,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <direct.h>
+#define chdir _chdir
+#else
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 #include "config.h"
 #include "raylib.h"
@@ -21,6 +28,28 @@
 #include "gui.h"
 #include "midi.h"
 #include "params.h"
+
+/* Onde ficam presets, configurações, gravações e o mapa do MIDI learn.
+   - App do macOS (.app): em ~/Library/Application Support/Virtual Synth,
+     porque o pacote do app não pode ser alterado.
+   - Windows e Linux: ao lado do executável (versão "portátil": dá para
+     levar a pasta inteira para outro computador). */
+static void use_data_dir(void)
+{
+    const char *exe = GetApplicationDirectory();
+#ifdef __APPLE__
+    if (strstr(exe, ".app/Contents/MacOS")) {
+        const char *home = getenv("HOME");
+        if (!home) return;
+        char dir[1024];
+        snprintf(dir, sizeof dir, "%s/Library/Application Support/Virtual Synth", home);
+        mkdir(dir, 0755);
+        if (chdir(dir) != 0) fprintf(stderr, "Não deu para usar a pasta %s\n", dir);
+        return;
+    }
+#endif
+    if (exe && exe[0] && chdir(exe) != 0) fprintf(stderr, "Não deu para usar a pasta %s\n", exe);
+}
 
 int main(int argc, char **argv)
 {
@@ -51,6 +80,7 @@ int main(int argc, char **argv)
     }
 
     SetTraceLogLevel(LOG_ERROR); /* esconde as mensagens informativas do raylib */
+    if (!opt.screenshot) use_data_dir(); /* capturas: ficam na pasta atual */
     static Engine engine;
     if (engine_init(&engine, SAMPLE_RATE) < 0) {
         fprintf(stderr, "Sem memória para o motor de áudio\n");

@@ -1,0 +1,17 @@
+Virtual Synth para Windows
+==========================
+
+1. Descompacte esta pasta onde quiser (Documentos, Área de Trabalho...).
+   Evite "Arquivos de Programas": o programa salva seus presets e
+   configurações ao lado do VirtualSynth.exe.
+2. Dê dois cliques em VirtualSynth.exe.
+
+Na primeira vez o Windows pode mostrar "O Windows protegeu o computador"
+(o programa não é assinado digitalmente). Clique em "Mais informações" e
+depois em "Executar assim mesmo".
+
+Guitarra com interface de áudio: na engrenagem (Configurações de áudio),
+escolha a saída "ASIO: nome da sua interface" para o menor atraso.
+
+Código-fonte e ajuda: https://github.com/vDonasan/VSynth
+Licença: GPLv3 (arquivo LICENSE).

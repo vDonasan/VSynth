@@ -683,7 +683,7 @@ static void draw_top_bar(Gui *g)
     DrawRectangle(0, 0, UI_W, 56, C_BAR);
     DrawRectangle(0, 56, UI_W, 1, (Color){31, 36, 44, 255});
     draw_logo(16, 14);
-    ui_text("Sintetizador", 54, 18, 15, UI_BOLD, C_TEXT);
+    ui_text("Virtual Synth", 54, 18, 15, UI_BOLD, C_TEXT);
 
     /* seletor de preset: ‹ [TAG Nome ▾] › */
     Rectangle grp = {212, 10, 320, 36};
@@ -1918,7 +1918,7 @@ int gui_run(Engine *e, const GuiOptions *opt)
     snprintf(g->preset_name, sizeof g->preset_name, "Inicial");
 
     SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT | FLAG_VSYNC_HINT | FLAG_WINDOW_HIGHDPI);
-    InitWindow(opt && opt->width ? opt->width : UI_W, opt && opt->height ? opt->height : UI_H, "Sintetizador");
+    InitWindow(opt && opt->width ? opt->width : UI_W, opt && opt->height ? opt->height : UI_H, "Virtual Synth");
     SetWindowMinSize(640, 400);
     SetExitKey(KEY_NULL); /* Esc não fecha sem querer */
     SetTargetFPS(60);

@@ -4,6 +4,28 @@ Sintetizador em C.
 
 ![Tela principal, aba Efeitos](docs/efeitos.png)
 
+## Baixar
+
+Não precisa compilar nem usar o terminal: baixe, descompacte e abra.
+
+| Sistema | Download |
+|---|---|
+| **Windows** 10/11 (64 bits) | [VirtualSynth-Windows.zip](https://github.com/vDonasan/VSynth/releases/latest/download/VirtualSynth-Windows.zip) |
+| **macOS** 11 ou mais novo (Apple Silicon e Intel) | [VirtualSynth-macOS.zip](https://github.com/vDonasan/VSynth/releases/latest/download/VirtualSynth-macOS.zip) |
+| **Linux** x86_64 | [VirtualSynth-Linux.tar.gz](https://github.com/vDonasan/VSynth/releases/latest/download/VirtualSynth-Linux.tar.gz) |
+
+Todas as versões: [Releases](https://github.com/vDonasan/VSynth/releases).
+
+- **Windows:** abra `VirtualSynth.exe`. Na primeira vez, se aparecer "O Windows
+  protegeu o computador", clique em *Mais informações* → *Executar assim mesmo*
+  (o programa não é assinado digitalmente).
+- **macOS:** arraste o app para Aplicativos e, na primeira vez, clique com o
+  botão direito → *Abrir* → *Abrir*. Permita o microfone para usar a guitarra.
+- **Linux:** abra `VirtualSynth` (precisa de X11 ou XWayland com OpenGL).
+
+Presets e configurações ficam ao lado do programa (no macOS, em
+`~/Library/Application Support/Virtual Synth`).
+
 Sintetizador com interface gráfica que você toca pelo **teclado do computador**,
 pelo **piano na tela**, por um **teclado/controlador MIDI** ou por uma
 **guitarra/microfone** (o programa descobre a nota que você está tocando).
@@ -30,7 +52,7 @@ pelo **piano na tela**, por um **teclado/controlador MIDI** ou por uma
 
 ## Compilar
 
-O projeto usa CMake. Na primeira compilação ele **baixa sozinho** o raylib
+Só é preciso para mexer no código. O projeto usa CMake. Na primeira compilação ele **baixa sozinho** o raylib
 (janela), o miniaudio (áudio) e o PortMidi (MIDI) e, no Windows, também o
 PortAudio e o SDK ASIO. É preciso estar conectado à internet. A fonte Inter já
 vem no repositório e fica embutida no executável.
@@ -66,6 +88,14 @@ O Visual Studio (MSVC) não é suportado, porque o código usa `pthread` e
 atômicos do C11.
 
 Sem MIDI: `cmake -B build -DSYNTH_MIDI=OFF`.
+
+Do Linux para Windows (como os downloads são feitos):
+`cmake -B build-win -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-w64.cmake`.
+
+**Downloads automáticos:** `.github/workflows/release.yml` compila e testa nos
+três sistemas a cada envio. Para publicar uma versão nova:
+`git tag v1.1.0 && git push --tags`; a Release aparece sozinha com os três
+arquivos.
 
 **ASIO (menos atraso no Windows).** O build do Windows já vem com suporte
 aos drivers ASIO das interfaces de áudio. Na engrenagem (Configurações de
