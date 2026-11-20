@@ -78,6 +78,13 @@ typedef struct {
     int    last_mode, mout_last_src, mout_seen;
     double mout_blink;
 
+    /* medição de latência: 5 rodadas, mostra a mediana */
+    int    lat_runs;
+    bool   lat_running;
+    float  lat_vals[5];
+    float  lat_ms;      /* resultado (0 = ainda não mediu, <0 = falhou) */
+    double lat_next;
+
     /* calibração do gate */
     double calib_until;
     float  calib_max;
@@ -1477,7 +1484,38 @@ static void tab_midi_out(Gui *g)
 /* Janelas por cima                                                    */
 /* ------------------------------------------------------------------ */
 static Rectangle save_rect(void) { return (Rectangle){470, 54, 300, 128}; }
-static Rectangle audio_rect(void) { return (Rectangle){UI_W / 2 - 280, 110, 560, 420}; }
+static Rectangle audio_rect(void) { return (Rectangle){UI_W / 2 - 280, 96, 560, 520}; }
+
+static int cmp_float(const void *a, const void *b) { float x = *(const float *)a, y = *(const float *)b; return (x > y) - (x < y); }
+
+static void latency_update(Gui *g)
+{
+    if (!g->lat_running) return;
+    Engine *e = g->e;
+    int st = atomic_load(&e->lat_state);
+    if (st == LAT_FAIL) {
+        g->lat_running = false;
+        g->lat_ms = -1;
+        atomic_store(&e->lat_state, LAT_IDLE);
+        set_status(g, "Latência: o clique não voltou pela entrada. Confira o cabo/microfone e o volume.");
+        return;
+    }
+    if (st == LAT_DONE) {
+        g->lat_vals[g->lat_runs++] = atomic_load(&e->lat_result) * 1000.0f / e->sr;
+        atomic_store(&e->lat_state, LAT_IDLE);
+        g->lat_next = GetTime() + 0.25;
+        if (g->lat_runs == 5) {
+            qsort(g->lat_vals, 5, sizeof(float), cmp_float);
+            g->lat_ms = g->lat_vals[2]; /* mediana: ignora uma medição estranha */
+            g->lat_running = false;
+            char m[160];
+            snprintf(m, sizeof m, "Latência de ida e volta: %.1f ms (mediana de 5 medições)", g->lat_ms);
+            set_status(g, m);
+        }
+        return;
+    }
+    if (st == LAT_IDLE && GetTime() >= g->lat_next) engine_latency_start(e);
+}
 
 static void draw_save_popup(Gui *g)
 {
@@ -1546,6 +1584,36 @@ static void draw_audio_dialog(Gui *g)
     ui_text("Modo exclusivo", x, r.y + 262, 12.5f, UI_SEMIBOLD, C_TEXT2);
     ui_text("Só no Windows. No Linux, use PipeWire/JACK com buffer pequeno.", x, r.y + 282, 12, UI_REGULAR, C_TEXT2);
 #endif
+
+    /* medidor de latência real */
+    DrawRectangle((int)x, (int)r.y + 314, (int)w, 1, C_BORDER);
+    ui_text("Medir a latência real", x, r.y + 330, 12.5f, UI_SEMIBOLD, C_TEXT);
+    ui_text("Ligue um cabo da saída na entrada da interface (ou encoste o", x, r.y + 350, 12, UI_REGULAR, C_TEXT2);
+    ui_text("microfone no alto-falante), com a entrada Guitarra ativa.", x, r.y + 367, 12, UI_REGULAR, C_TEXT2);
+    Rectangle mb = {x, r.y + 394, 150, 36};
+    char bl[40];
+    if (g->lat_running) snprintf(bl, sizeof bl, "Medindo %d/5...", g->lat_runs + 1);
+    else snprintf(bl, sizeof bl, "@play Medir");
+    if (ui_button(mb, bl, UI_BTN_CYAN) && !g->lat_running) {
+        if (param_geti(P_INPUT_MODE) != 2 || engine_capture_channels(g->e) == 0) {
+            set_status(g, "Para medir, escolha a entrada Guitarra (o programa precisa ouvir a entrada).");
+        } else {
+            g->lat_running = true;
+            g->lat_runs = 0;
+            g->lat_next = 0;
+            atomic_store(&g->e->lat_state, LAT_IDLE);
+            set_status(g, "Medindo a latência: vão tocar 5 cliques curtos...");
+        }
+    }
+    if (g->lat_ms > 0) {
+        snprintf(t, sizeof t, "Ida e volta: %.1f ms", g->lat_ms);
+        ui_text(t, x + 166, r.y + 396, 15, UI_BOLD, C_CYAN_HI);
+        snprintf(t, sizeof t, "Da palhetada ao som: ~%.0f a %.0f ms (+ 12 a 17 ms para reconhecer a nota)", g->lat_ms + 12, g->lat_ms + 17);
+        ui_text(t, x + 166, r.y + 416, 11.5f, UI_REGULAR, C_TEXT2);
+    } else if (g->lat_ms < 0) {
+        ui_text("Não ouvi o clique voltar. Confira o cabo e o volume.", x + 166, r.y + 404, 12, UI_REGULAR, C_RED);
+    }
+    ui_text("Dica: a parte do driver é a que mais varia entre computadores.", x, r.y + 470, 12, UI_REGULAR, C_TEXT2);
     if (ui_pressed_outside(r)) g->audio_open = false;
     if (IsKeyPressed(KEY_ESCAPE)) g->audio_open = false;
 }
@@ -1653,6 +1721,7 @@ int gui_run(Engine *e, const GuiOptions *opt)
             }
         }
         if (recorder_active(&g->rec)) drain_recording(g);
+        latency_update(g);
         handle_keyboard(g);
         if (IsKeyPressed(KEY_F1)) ToggleFullscreen();
 

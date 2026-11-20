@@ -80,12 +80,24 @@ typedef struct {
     atomic_uchar  notes_on[128];
     atomic_int    beat;
 
+    /* medidor de latência real (ida e volta pela placa de som) */
+    atomic_int    lat_state;   /* LatState */
+    atomic_int    lat_result;  /* amostras entre o clique sair e voltar */
+    long long     sample_clock, lat_t0, lat_deadline;
+    float         lat_noise;
+
     /* gravação: o callback escreve no anel, a interface grava no disco */
     FloatRing   rec_ring;
     atomic_bool rec_on;
 } Engine;
 
+typedef enum { LAT_IDLE, LAT_NOISE, LAT_CLICK, LAT_LISTEN, LAT_DONE, LAT_FAIL } LatState;
+
 int  engine_init(Engine *e, float sr);
+/* Mede a latência de ida e volta: mede o ruído da entrada, toca um clique
+   e espera ele voltar pela entrada (cabo da saída na entrada, ou
+   microfone perto do alto-falante). Resultado em lat_result (amostras). */
+void engine_latency_start(Engine *e);
 void engine_free(Engine *e);
 
 /* in: amostras entrelaçadas de captura (ou NULL); out: estéreo entrelaçado */

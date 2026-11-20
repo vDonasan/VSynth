@@ -9,8 +9,13 @@
 
 /* Detecção de altura (guitarra / microfone) */
 #define PITCH_WINDOW       1280     /* janela longa: 27 ms, cobre as notas graves */
-#define PITCH_SHORT_WINDOW 768      /* janela curta: 16 ms, responde rápido nas agudas */
-#define PITCH_SHORT_MIN_HZ 180.0f   /* abaixo disso só a janela longa é confiável */
+#define PITCH_SHORT_WINDOW 512      /* janela curta: 10,7 ms, responde rápido nas agudas */
+#define PITCH_SHORT_FMIN   160.0f   /* menor frequência que a janela curta procura */
+#define PITCH_SHORT_MIN_HZ 180.0f   /* abaixo disso a curta não é confiável */
+#define PITCH_MID_WINDOW   832      /* janela média: 17 ms, para as cordas graves */
+#define PITCH_MID_FMIN     78.0f    /* (o Ré do drop-D, 73 Hz, fica com a longa) */
+#define PITCH_FAST_CONF    0.92f    /* leitura com confiança acima disso não espera confirmação */
+#define PITCH_SETTLE_HOPS  6        /* análises ignorando a nota antiga após a palhetada */
 #define PITCH_HOP          128      /* nova análise a cada 2,7 ms */
 #define PITCH_FMIN         70.0f    /* Hz – cobre afinação drop-D (D2 = 73 Hz) */
 #define PITCH_FMAX         1500.0f  /* Hz */

@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "params.h"
+
 #include "platform.h"
 
 void guitar_push(Guitar *g, const float *mono, int frames)
@@ -38,14 +39,20 @@ void guitar_process_hop(Guitar *g, const float *hop)
     float hz = -1.0f;
     if (db > g->tracker.off_db) {
         /* Janela curta primeiro: uma nota aguda é reconhecida assim que
-           16 ms dela entram na janela, sem esperar os 32 ms da longa.
-           O YIN sempre escolhe o MENOR período que passa no teste, então
-           a curta não inventa erros de oitava que a longa não teria. */
+           ~11 ms dela entram na janela, sem esperar as maiores. O YIN
+           sempre escolhe o MENOR período que passa no teste, então uma
+           janela menor não inventa erros de oitava que a longa não teria. */
         float conf = 0.0f;
         Yin *used = &g->yin_short;
         float hs = yin_detect(&g->yin_short, g->window + PITCH_WINDOW - PITCH_SHORT_WINDOW, &conf);
+        float cm = 0;
         if (hs >= PITCH_SHORT_MIN_HZ && conf > 0.85f) hz = hs;
-        else { hz = yin_detect(&g->yin, g->window, NULL); used = &g->yin; }
+        else if ((hz = yin_detect(&g->yin_mid, g->window + PITCH_WINDOW - PITCH_MID_WINDOW, &cm)) > 0 && cm > 0.85f) {
+            used = &g->yin_mid; /* janela média: cordas graves sem esperar a longa */
+            conf = cm;
+        }
+        else { hz = yin_detect(&g->yin, g->window, &conf); used = &g->yin; }
+        g->tracker.conf = hz > 0 ? conf : 0;
 
         /* Correção de oitava por continuidade: com uma nota soando, uma
            leitura de 2x, 3x ou 4x a frequência dela costuma ser um
@@ -101,7 +108,8 @@ void guitar_reset(Guitar *g)
     memset(g->window, 0, sizeof g->window);
     tracker_init(&g->tracker, param_get(P_GTR_GATE), GATE_HYSTERESIS_DB);
     tracker_set_refractory(&g->tracker, 60.0f, g->sr, PITCH_HOP);
-    tracker_set_settle(&g->tracker, PITCH_SHORT_WINDOW / PITCH_HOP);
+    tracker_set_settle(&g->tracker, PITCH_SETTLE_HOPS);
+    g->tracker.fast_conf = PITCH_FAST_CONF;
     atomic_store(&g->st_note, -1);
     atomic_store(&g->st_hz, -1.0f);
     atomic_store(&g->st_db, -120.0f);
@@ -122,7 +130,8 @@ int guitar_init(Guitar *g, float sr, EventQueue *q)
     atomic_init(&g->level, 0.0f);
     if (fring_init(&g->ring, 32768) < 0) return -1;
     if (yin_init(&g->yin, sr, PITCH_WINDOW, PITCH_FMIN, PITCH_FMAX, PITCH_THRESHOLD) < 0) return -1;
-    if (yin_init(&g->yin_short, sr, PITCH_SHORT_WINDOW, PITCH_SHORT_MIN_HZ * 0.5f, PITCH_FMAX, PITCH_THRESHOLD) < 0) return -1;
+    if (yin_init(&g->yin_short, sr, PITCH_SHORT_WINDOW, PITCH_SHORT_FMIN, PITCH_FMAX, PITCH_THRESHOLD) < 0) return -1;
+    if (yin_init(&g->yin_mid, sr, PITCH_MID_WINDOW, PITCH_MID_FMIN, PITCH_FMAX, PITCH_THRESHOLD) < 0) return -1;
     guitar_reset(g);
     return 0;
 }
@@ -160,5 +169,6 @@ void guitar_free(Guitar *g)
     guitar_stop(g);
     yin_free(&g->yin);
     yin_free(&g->yin_short);
+    yin_free(&g->yin_mid);
     fring_free(&g->ring);
 }

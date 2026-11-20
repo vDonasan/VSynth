@@ -188,6 +188,15 @@ int tracker_process(NoteTracker *t, float hz, float db, Event *out, int max)
     /* Ruído de abafar a corda ainda carrega a afinação: não é nota nova */
     if (t->current < 0 && note == t->last_off && t->since_off <= t->rering) return n;
 
+    /* Mudança sem palhetada (legato) perto do ruído: no fim de uma nota o
+       chiado gera leituras aleatórias. Só aceita com sinal bem acima do
+       gate e leitura confiável; senão mantém a nota até ela terminar. */
+    if (t->current >= 0 && !t->attack_pending && note != t->current &&
+        (db < t->on_db + 6.0f || (t->conf > 0 && t->conf < 0.88f))) {
+        t->cand_count = 0;
+        return n;
+    }
+
     /* Logo após a palhetada a janela ainda "ouve" a nota anterior */
     if (t->attack_pending && note == t->current && t->pend_hops <= t->settle) return n;
 
@@ -200,6 +209,7 @@ int tracker_process(NoteTracker *t, float hz, float db, Event *out, int max)
        12ª, 2 oitavas...) quase sempre é o detector se confundindo com um
        harmônico forte, não o músico. Exige confirmação bem mais longa. */
     int needed = t->stable_needed;
+    if (t->fast_conf > 0 && t->conf >= t->fast_conf) needed = 1; /* leitura muito limpa: aceita já */
     if (t->current >= 0 && !t->attack_pending) {
         int jump = note - t->current;
         if (jump == 12 || jump == 19 || jump == 24 || jump == 28 || jump == 31 || jump == -12 || jump == -19 || jump == -24)

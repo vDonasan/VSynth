@@ -63,6 +63,8 @@ int engine_init(Engine *e, float sr)
     atomic_init(&e->peak, 0.0f);
     atomic_init(&e->beat, 0);
     atomic_init(&e->rec_on, false);
+    atomic_init(&e->lat_state, LAT_IDLE);
+    atomic_init(&e->lat_result, -1);
     for (int i = 0; i < 128; i++) atomic_init(&e->notes_on[i], 0);
     for (int i = 0; i < SCOPE_SIZE; i++) atomic_init(&e->scope[i], 0.0f);
     return 0;
@@ -78,6 +80,57 @@ void engine_free(Engine *e)
     looper_free(&e->looper);
     fx_free(&e->fx);
     fring_free(&e->rec_ring);
+}
+
+void engine_latency_start(Engine *e)
+{
+    atomic_store(&e->lat_result, -1);
+    atomic_store(&e->lat_state, LAT_NOISE);
+}
+
+/* Roda no fim de cada bloco do callback */
+static void latency_step(Engine *e, const float *in, int ch, float *out, int frames)
+{
+    int st = atomic_load_explicit(&e->lat_state, memory_order_relaxed);
+    if (st == LAT_IDLE || st == LAT_DONE || st == LAT_FAIL) return;
+    if (!in) { atomic_store(&e->lat_state, LAT_FAIL); return; } /* sem entrada aberta */
+    float peak = 0;
+    for (int i = 0; i < frames * ch; i++) peak = fmaxf(peak, fabsf(in[i]));
+    switch (st) {
+    case LAT_NOISE: /* 150 ms ouvindo o ruído de fundo */
+        if (e->lat_deadline == 0) { e->lat_deadline = e->sample_clock + (long long)(0.15f * e->sr); e->lat_noise = 0; }
+        e->lat_noise = fmaxf(e->lat_noise, peak);
+        if (e->sample_clock >= e->lat_deadline) atomic_store(&e->lat_state, LAT_CLICK);
+        break;
+    case LAT_CLICK: { /* clique curto e forte, por cima do som */
+        int n = frames < 48 ? frames : 48;
+        for (int i = 0; i < n; i++) {
+            float v = ((i / 4) % 2 ? -0.7f : 0.7f) * (1.0f - i / 48.0f);
+            out[2 * i] = v;
+            out[2 * i + 1] = v;
+        }
+        e->lat_t0 = e->sample_clock;
+        e->lat_deadline = e->sample_clock + (long long)e->sr; /* desiste depois de 1 s */
+        atomic_store(&e->lat_state, LAT_LISTEN);
+        break;
+    }
+    case LAT_LISTEN: {
+        float thr = fmaxf(0.04f, e->lat_noise * 4.0f);
+        for (int i = 0; i < frames; i++) {
+            for (int c = 0; c < ch; c++) {
+                if (fabsf(in[i * ch + c]) > thr) {
+                    atomic_store(&e->lat_result, (int)(e->sample_clock + i - e->lat_t0));
+                    atomic_store(&e->lat_state, LAT_DONE);
+                    e->lat_deadline = 0;
+                    return;
+                }
+            }
+        }
+        if (e->sample_clock + frames > e->lat_deadline) { atomic_store(&e->lat_state, LAT_FAIL); e->lat_deadline = 0; }
+        break;
+    }
+    default: break;
+    }
 }
 
 void engine_ui_event(Engine *e, EventType type, int note, int vel)
@@ -377,6 +430,8 @@ void engine_process(Engine *e, const float *in, int in_channels, float *out, int
         }
     }
     atomic_store_explicit(&e->scope_pos, sp, memory_order_relaxed);
+    latency_step(e, in, in_channels, out, frames);
+    e->sample_clock += frames;
     atomic_store_explicit(&e->peak, peak, memory_order_relaxed);
 
     /* 5. quais notas estão soando (para acender o piano) */

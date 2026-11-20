@@ -44,6 +44,8 @@ typedef struct {
     int   pend_hops;      /* análises desde a palhetada */
     int   settle;         /* até a janela se renovar, a nota antiga não vale */
     int   last_off, since_off, rering; /* abafou: a mesma nota não volta já */
+    float conf;           /* confiança da última análise (0..1) */
+    float fast_conf;      /* acima disso, aceita a nota sem esperar confirmação */
 } NoteTracker;
 
 void tracker_init(NoteTracker *t, float on_db, float hysteresis_db);

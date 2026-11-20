@@ -28,6 +28,7 @@ typedef struct {
     int           started;
     Yin           yin;        /* janela longa (graves) */
     Yin           yin_short;  /* janela curta (agudas, menos atraso) */
+    Yin           yin_mid;    /* janela média (graves, menos atraso que a longa) */
     NoteTracker   tracker;
     float         sr;
     float         dc_x1, dc_y1, lp_y1, lp_coef;

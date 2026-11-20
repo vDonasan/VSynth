@@ -231,6 +231,35 @@ static void test_octave_jumps(void)
     free(x);
 }
 
+/* Hammer-on: o som continua e só a altura muda (sem palhetada nova) */
+static void test_legato(void)
+{
+    printf("Teste 3c: legato (hammer-on, sem palhetada)\n");
+    int len = (int)(1.3f * SR);
+    float *x = calloc(len, sizeof(float));
+    double ph = 0;
+    for (int i = 0; i < len; i++) {
+        float t = (float)i / SR;
+        int note = t < 0.1f ? -1 : (t < 0.5f ? 52 : (t < 0.9f ? 55 : -1));
+        float a = note < 0 ? 0 : 0.25f;
+        if (note >= 0) ph += midi_hz(note) / SR;
+        float v = 0;
+        for (int h = 1; h <= 5; h++) v += sinf((float)(6.283185307 * h * ph)) / h; /* som "de corda": vários harmônicos */
+        x[i] = a * v * 0.6f + frand() * 0.0005f;
+    }
+    Timed ev[512];
+    int n = detect(x, len, ev, 512);
+    char log[128] = "";
+    for (int i = 0; i < n; i++) {
+        char b[16];
+        snprintf(b, sizeof b, " %s%d", ev[i].ev.type == EV_NOTE_ON ? "on" : "off", ev[i].ev.note);
+        strncat(log, b, sizeof log - strlen(log) - 1);
+    }
+    printf("  eventos:%s\n  esperado: on52 on55 off55 (sem off entre as duas: o synth desliza)\n", log);
+    CHECK(!strcmp(log, " on52 on55 off55"), "legato errado");
+    free(x);
+}
+
 static void test_repick(void)
 {
     printf("Teste 4: mesma nota palhetada de novo gera nova nota\n");
@@ -507,6 +536,48 @@ static void test_midi_out(void)
     params_init();
 }
 
+/* Simula um cabo da saída na entrada, com atraso conhecido */
+static void test_latency_meter(void)
+{
+    printf("Teste 6d: medidor de latência (cabo simulado da saída na entrada)\n");
+    static Engine e;
+    engine_init(&e, SR);
+    params_init();
+    const int delays[3] = {300, 731, 2048}; /* 6,3 / 15,2 / 42,7 ms */
+    for (int k = 0; k < 3; k++) {
+        int D = delays[k];
+        static float line[SR * 2];
+        memset(line, 0, sizeof line);
+        static float out[2 * 128], in[128];
+        long long t = 0;
+        engine_latency_start(&e);
+        for (int b = 0; b < 600 && atomic_load(&e.lat_state) != LAT_DONE && atomic_load(&e.lat_state) != LAT_FAIL; b++) {
+            for (int i = 0; i < 128; i++) { /* entrada = saída atrasada D amostras + chiado */
+                long long src = t + i - D;
+                in[i] = (src >= 0 ? line[src % (SR * 2)] : 0) * 0.5f + frand() * 0.002f;
+            }
+            engine_process(&e, in, 1, out, 128);
+            for (int i = 0; i < 128; i++) line[(t + i) % (SR * 2)] = out[2 * i];
+            t += 128;
+        }
+        int r = atomic_load(&e.lat_result);
+        printf("  atraso real %4d amostras (%.1f ms) -> medido %4d (%.1f ms)\n", D, D * 1000.0f / SR, r, r * 1000.0f / SR);
+        CHECK(atomic_load(&e.lat_state) == LAT_DONE && abs(r - D) <= 2, "medição errada");
+        atomic_store(&e.lat_state, LAT_IDLE);
+    }
+    /* sem nada ligado: tem que desistir, não inventar um número */
+    engine_latency_start(&e);
+    static float out2[2 * 128], silence[128];
+    for (int b = 0; b < 600 && atomic_load(&e.lat_state) != LAT_FAIL && atomic_load(&e.lat_state) != LAT_DONE; b++) {
+        for (int i = 0; i < 128; i++) silence[i] = frand() * 0.002f;
+        engine_process(&e, silence, 1, out2, 128);
+    }
+    printf("  sem cabo: %s\n", atomic_load(&e.lat_state) == LAT_FAIL ? "desistiu (certo)" : "MEDIU ALGO ERRADO");
+    CHECK(atomic_load(&e.lat_state) == LAT_FAIL, "deveria desistir sem sinal de volta");
+    engine_free(&e);
+    params_init();
+}
+
 static void test_looper(void)
 {
     printf("Teste 7: looper grava, repete e desfaz o overdub\n");
@@ -610,6 +681,7 @@ int main(void)
     test_silence();
     test_riff();
     test_octave_jumps();
+    test_legato();
     test_repick();
     test_fx();
     test_smoothing();
@@ -617,6 +689,7 @@ int main(void)
     test_arp();
     test_harmonizer();
     test_midi_out();
+    test_latency_meter();
     test_looper();
     test_presets();
     render_demo();
