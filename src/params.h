@@ -86,6 +86,12 @@ void  params_smooth_step(float coef); /* chamar a cada pedaço de áudio */
 void  params_smooth_snap(void);       /* pula direto para os alvos */
 float param_s(int id);                /* valor suavizado */
 
+/* Todos os parâmetros (inclusive os que não vão para presets), para o
+   arquivo de configurações. params_read_line devolve 1 se reconheceu. */
+#include <stdio.h>
+void params_write_all(FILE *f);
+int  params_read_line(const char *key, const char *value);
+
 /* Presets: arquivos de texto "chave = valor" */
 int         preset_save(const char *path);
 int         preset_load(const char *path);

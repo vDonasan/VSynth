@@ -431,7 +431,7 @@ int engine_open(Engine *e, int play, int cap, int cap_channel)
 
     ma_device_config cfg = ma_device_config_init(cap == -2 ? ma_device_type_playback : ma_device_type_duplex);
     cfg.sampleRate         = (ma_uint32)e->sr;
-    cfg.periodSizeInFrames = FRAMES_PER_BUFFER;
+    cfg.periodSizeInFrames = e->period_frames > 0 ? (ma_uint32)e->period_frames : FRAMES_PER_BUFFER;
     cfg.performanceProfile = ma_performance_profile_low_latency;
     cfg.playback.format    = ma_format_f32;
     cfg.playback.channels  = 2;
@@ -442,7 +442,19 @@ int engine_open(Engine *e, int play, int cap, int cap_channel)
     cfg.dataCallback       = data_callback;
     cfg.pUserData          = e;
 
-    if (ma_device_init(&a->ctx, &cfg, &a->dev) != MA_SUCCESS) return -1;
+    e->exclusive_failed = 0;
+    if (e->exclusive) {
+        cfg.playback.shareMode = ma_share_mode_exclusive;
+        cfg.capture.shareMode  = ma_share_mode_exclusive;
+    }
+    if (ma_device_init(&a->ctx, &cfg, &a->dev) != MA_SUCCESS) {
+        if (!e->exclusive) return -1;
+        /* o dispositivo não aceitou o modo exclusivo: tenta o compartilhado */
+        cfg.playback.shareMode = ma_share_mode_shared;
+        cfg.capture.shareMode  = ma_share_mode_shared;
+        if (ma_device_init(&a->ctx, &cfg, &a->dev) != MA_SUCCESS) return -1;
+        e->exclusive_failed = 1;
+    }
     e->dev_ok         = 1;
     e->dev_rate       = a->dev.playback.internalSampleRate;
     e->dev_latency_ms = e->dev_rate ? 1000.0f * a->dev.playback.internalPeriodSizeInFrames / e->dev_rate : 0;

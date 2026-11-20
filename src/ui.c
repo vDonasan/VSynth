@@ -51,7 +51,7 @@ static struct {
     bool   learn;
     int    learn_target;
 
-    bool   modal;
+    bool   modal, in_modal;
     Rectangle modal_rect;
 } U;
 
@@ -299,11 +299,12 @@ bool ui_typing(void) { return U.focus != 0; }
 bool ui_hover(Rectangle r)
 {
     if (U.dd_open || (U.active && !U.down)) return false;
-    if (U.modal && !CheckCollisionPointRec(U.mouse, U.modal_rect)) return false;
+    if (U.modal && (!U.in_modal || !CheckCollisionPointRec(U.mouse, U.modal_rect))) return false;
     return CheckCollisionPointRec(U.mouse, r);
 }
 
-void ui_set_modal(bool on, Rectangle r) { U.modal = on; U.modal_rect = r; }
+void ui_set_modal(bool on, Rectangle r) { U.modal = on; U.modal_rect = r; U.in_modal = false; }
+void ui_modal_content(void) { U.in_modal = true; }
 
 bool ui_pressed_outside(Rectangle r)
 {
@@ -715,6 +716,6 @@ void ui_learn_zone(Rectangle r, int param)
         ui_rect(tag, 5, C_AMBER);
         ui_text_center(t, tag, 10, UI_BOLD, (Color){42, 26, 2, 255});
     }
-    if (U.pressed && CheckCollisionPointRec(U.mouse, r) && !U.dd_open) U.learn_target = param;
+    if (U.pressed && ui_hover(r)) U.learn_target = param;
     if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) && CheckCollisionPointRec(U.mouse, r) && cc >= 0) midi_map(cc, -1);
 }

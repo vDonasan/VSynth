@@ -92,6 +92,9 @@ void  ui_tooltip(Rectangle r, const char *text); /* dica ao parar o mouse em cim
 /* Janela modal: enquanto ligada, só a área `r` recebe o mouse.
    Chame no começo do quadro, antes de desenhar o resto. */
 void  ui_set_modal(bool on, Rectangle r);
+/* Chame antes de desenhar o conteúdo da janela modal: a partir daí só
+   ela recebe o mouse (o que foi desenhado antes fica bloqueado). */
+void  ui_modal_content(void);
 bool  ui_pressed_outside(Rectangle r);    /* clicou fora (para fechar popups) */
 
 /* ---------- controles ---------- */

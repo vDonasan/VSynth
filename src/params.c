@@ -250,6 +250,19 @@ int preset_save(const char *path)
     return 0;
 }
 
+void params_write_all(FILE *f)
+{
+    for (int i = 0; i < P_COUNT; i++) fprintf(f, "%s = %g\n", DEFS[i].key, param_get(i));
+}
+
+int params_read_line(const char *key, const char *value)
+{
+    int id = param_find(key);
+    if (id < 0) return 0;
+    param_set(id, (float)atof(value));
+    return 1;
+}
+
 static void apply_line(char *line)
 {
     char *eq = strchr(line, '=');

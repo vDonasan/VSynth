@@ -9,6 +9,7 @@
  *   --preset N             aplica o preset de fábrica N
  *   --screenshot ARQ.png   salva uma captura no quadro 30 e fecha
  *   --null-audio           sem placa de som (áudio descartado, tempo real)
+ *   --exit-after N         fecha sozinho depois de N quadros (testes)
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,19 +25,23 @@
 int main(int argc, char **argv)
 {
     GuiOptions opt = {0};
+    opt.start_preset = -1;
+    opt.start_mode   = -1;
     int null_audio = 0;
     params_init();
     for (int i = 1; i < argc; i++) {
         const char *next = i + 1 < argc ? argv[i + 1] : NULL;
         if (!strcmp(argv[i], "--tab") && next) { opt.start_tab = atoi(next); i++; }
-        else if (!strcmp(argv[i], "--mode") && next) { param_set(P_INPUT_MODE, (float)atof(next)); i++; }
+        else if (!strcmp(argv[i], "--mode") && next) { opt.start_mode = atoi(next); i++; }
         else if (!strcmp(argv[i], "--preset") && next) {
             opt.start_preset = atoi(next);
-            if (opt.start_preset >= 0 && opt.start_preset < factory_preset_count()) factory_preset_apply(opt.start_preset);
             i++;
         }
         else if (!strcmp(argv[i], "--screenshot") && next) {
-            opt.screenshot = next; opt.screenshot_frame = 30; opt.exit_frame = 31; i++;
+            opt.screenshot = next; opt.screenshot_frame = 30; opt.exit_frame = 31; opt.no_settings = 1; i++;
+        } else if (!strcmp(argv[i], "--exit-after") && next) { /* testes: fecha sozinho, salvando as configurações */
+            opt.exit_frame = atoi(next);
+            i++;
         } else if (!strcmp(argv[i], "--null-audio")) {
             null_audio = 1;
         } else {

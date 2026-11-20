@@ -52,6 +52,9 @@ typedef struct {
     int         null_backend; /* testes: áudio "de mentira", mas no tempo certo */
     int         dev_ok;
     unsigned    dev_rate;       /* taxa real do dispositivo */
+    int         period_frames;  /* tamanho do buffer pedido (64, 128, 256...) */
+    int         exclusive;      /* modo exclusivo (WASAPI no Windows): menos atraso */
+    int         exclusive_failed;
     float       dev_latency_ms; /* tamanho do buffer em ms */
     AudioDevice play[MAX_AUDIO_DEVS], cap[MAX_AUDIO_DEVS];
     int         nplay, ncap;

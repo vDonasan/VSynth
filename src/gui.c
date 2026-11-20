@@ -27,6 +27,7 @@
 #include "ui.h"
 
 #define PRESET_DIR "presets"
+#define SETTINGS_FILE "configuracoes.ini"
 #define REC_DIR    "gravacoes"
 #define MAX_USER_PRESETS 64
 
@@ -76,6 +77,10 @@ typedef struct {
     int    ntaps;
     int    last_mode, mout_last_src, mout_seen;
     double mout_blink;
+
+    /* calibração do gate */
+    double calib_until;
+    float  calib_max;
 
     /* arrastar pedais */
     int   drag_fx;   /* posição (slot) sendo arrastada, -1 = nenhuma */
@@ -273,6 +278,86 @@ static void save_preset(Gui *g, const char *name)
     } else {
         set_status(g, "Não foi possível salvar o preset");
     }
+}
+
+/* ------------------------------------------------------------------ */
+/* Configurações lembradas (configuracoes.ini, ao lado dos presets)    */
+/* ------------------------------------------------------------------ */
+static int find_item(const char *items, const char *name)
+{
+    int idx = 0;
+    const char *p = items;
+    size_t n = strlen(name);
+    while (p && *p) {
+        const char *e = strchr(p, ';');
+        size_t l = e ? (size_t)(e - p) : strlen(p);
+        if (l == n && !strncmp(p, name, n)) return idx;
+        p = e ? e + 1 : NULL;
+        idx++;
+    }
+    return -1;
+}
+
+static void item_name(const char *items, int idx, char *buf, int len)
+{
+    const char *p = items;
+    for (int i = 0; i < idx && p; i++) { p = strchr(p, ';'); if (p) p++; }
+    if (!p) { buf[0] = 0; return; }
+    const char *e = strchr(p, ';');
+    snprintf(buf, len, "%.*s", e ? (int)(e - p) : (int)strlen(p), p);
+}
+
+static void save_settings(Gui *g)
+{
+    FILE *f = fopen(SETTINGS_FILE, "w");
+    if (!f) return;
+    char t[300];
+    fprintf(f, "# Configurações do Sintetizador (gravadas ao fechar o programa)\n");
+    item_name(g->out_items, g->out_active, t, sizeof t);   fprintf(f, "saida_audio = %s\n", t);
+    item_name(g->in_items, g->in_active, t, sizeof t);     fprintf(f, "entrada_audio = %s\n", t);
+    fprintf(f, "canal_entrada = %d\n", g->in_ch);
+    item_name(g->midi_items, g->midi_active, t, sizeof t); fprintf(f, "midi_entrada = %s\n", t);
+    item_name(g->mout_items, g->mout_active, t, sizeof t); fprintf(f, "midi_saida = %s\n", t);
+    fprintf(f, "buffer = %d\n", g->e->period_frames);
+    fprintf(f, "modo_exclusivo = %d\n", g->e->exclusive);
+    fprintf(f, "preset_nome = %s\n", g->preset_name);
+    fprintf(f, "preset_indice = %d\n", g->preset_active);
+    fprintf(f, "aba = %d\n", g->tab);
+    fprintf(f, "\n# Som atual e ajustes (mesmo formato dos presets)\n");
+    params_write_all(f);
+    fclose(f);
+}
+
+static void load_settings(Gui *g)
+{
+    FILE *f = fopen(SETTINGS_FILE, "r");
+    if (!f) return;
+    char line[512];
+    while (fgets(line, sizeof line, f)) {
+        if (line[0] == '#') continue;
+        char *eq = strchr(line, '=');
+        if (!eq) continue;
+        *eq = 0;
+        char *k = line, *v = eq + 1;
+        while (*k == ' ') k++;
+        for (char *e = k + strlen(k); e > k && (e[-1] == ' ' || e[-1] == '\t'); ) *--e = 0;
+        while (*v == ' ') v++;
+        for (char *e = v + strlen(v); e > v && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' '); ) *--e = 0;
+        int idx;
+        if (!strcmp(k, "saida_audio"))        { if ((idx = find_item(g->out_items, v)) >= 0) g->out_active = idx; }
+        else if (!strcmp(k, "entrada_audio")) { if ((idx = find_item(g->in_items, v)) >= 0) g->in_active = idx; }
+        else if (!strcmp(k, "canal_entrada")) g->in_ch = atoi(v);
+        else if (!strcmp(k, "midi_entrada"))  { if ((idx = find_item(g->midi_items, v)) >= 0) g->midi_active = idx; }
+        else if (!strcmp(k, "midi_saida"))    { if ((idx = find_item(g->mout_items, v)) >= 0) g->mout_active = idx; }
+        else if (!strcmp(k, "buffer"))        g->e->period_frames = atoi(v);
+        else if (!strcmp(k, "modo_exclusivo")) g->e->exclusive = atoi(v);
+        else if (!strcmp(k, "preset_nome"))   snprintf(g->preset_name, sizeof g->preset_name, "%s", v);
+        else if (!strcmp(k, "preset_indice")) g->preset_active = atoi(v);
+        else if (!strcmp(k, "aba"))           g->tab = atoi(v) % 6;
+        else params_read_line(k, v);
+    }
+    fclose(f);
+    if (g->preset_active < 0 || g->preset_active >= preset_total(g)) g->preset_active = 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -721,7 +806,35 @@ static void input_guitar(Gui *g, Rectangle p)
     char t[32];
     ui_text("Nível", x, y, 11, UI_REGULAR, C_TEXT2);
     snprintf(t, sizeof t, db < -90 ? "--" : "%.0f dB", db);
-    ui_text_right(t, x + w, y, 11.5f, UI_SEMIBOLD, C_TEXT);
+    ui_text(t, x + 36, y, 11.5f, UI_SEMIBOLD, C_TEXT);
+
+    /* calibrar: mede 3 s de cordas abafadas e põe o gate um pouco acima */
+    double now = GetTime();
+    Rectangle cb = {x + w - 112, y - 6, 112, 24};
+    bool calibrating = now < g->calib_until;
+    char cl[32];
+    if (calibrating) snprintf(cl, sizeof cl, "Medindo... %d", (int)ceil(g->calib_until - now));
+    else snprintf(cl, sizeof cl, "Calibrar gate");
+    if (ui_button(cb, cl, calibrating ? UI_BTN_AMBER : UI_BTN_NORMAL) && !calibrating) {
+        g->calib_until = now + 3.0;
+        g->calib_max = -120;
+        set_status(g, "Calibrando: deixe as cordas abafadas (sem tocar) por 3 segundos...");
+    }
+    ui_tooltip(cb, "Mede o ruído com as cordas abafadas e ajusta o gate sozinho.");
+    if (calibrating) {
+        if (db > g->calib_max) g->calib_max = db;
+    } else if (g->calib_until > 0) {
+        g->calib_until = 0;
+        char m[160];
+        if (g->calib_max < -85) {
+            param_set(P_GTR_GATE, -60);
+            snprintf(m, sizeof m, "Calibração: quase nenhum ruído. Gate em -60 dB (se não houver sinal, confira o cabo e o canal).");
+        } else {
+            param_set(P_GTR_GATE, clampf(g->calib_max + 8, -70, -10));
+            snprintf(m, sizeof m, "Calibração: ruído de %.0f dB, gate ajustado para %.0f dB.", g->calib_max, param_get(P_GTR_GATE));
+        }
+        set_status(g, m);
+    }
     Rectangle m = {x, y + 18, w, 12};
     ui_meter(m, 30, clampf((db + 70) / 70, 0, 1), 0.76f, 0.9f);
     float gx = m.x + m.width * clampf((gate + 70) / 70, 0, 1);
@@ -1364,7 +1477,7 @@ static void tab_midi_out(Gui *g)
 /* Janelas por cima                                                    */
 /* ------------------------------------------------------------------ */
 static Rectangle save_rect(void) { return (Rectangle){470, 54, 300, 128}; }
-static Rectangle audio_rect(void) { return (Rectangle){UI_W / 2 - 280, 140, 560, 300}; }
+static Rectangle audio_rect(void) { return (Rectangle){UI_W / 2 - 280, 110, 560, 420}; }
 
 static void draw_save_popup(Gui *g)
 {
@@ -1397,11 +1510,42 @@ static void draw_audio_dialog(Gui *g)
     ui_text("Saída de áudio", x, r.y + 52, 11, UI_REGULAR, C_TEXT2);
     if (ui_dropdown((Rectangle){x, r.y + 70, w - 44, 34}, g->out_items, &g->out_active, DD_OUT)) apply_audio(g);
     if (ui_button((Rectangle){x + w - 38, r.y + 70, 38, 34}, "@refresh", UI_BTN_NORMAL)) { build_device_lists(g); apply_audio(g); }
-    char t[128];
-    if (g->e->dev_ok) snprintf(t, sizeof t, "%u Hz · buffer de %.1f ms", g->e->dev_rate, g->e->dev_latency_ms);
-    else snprintf(t, sizeof t, "áudio desligado");
-    ui_text(t, x, r.y + 118, 12.5f, UI_SEMIBOLD, g->e->dev_ok ? C_TEXT : C_RED);
-    if (g->audio_error[0]) ui_text(g->audio_error, x, r.y + 140, 12, UI_REGULAR, C_RED);
+    char t[160];
+    if (g->e->dev_ok) snprintf(t, sizeof t, "Funcionando: %u Hz · buffer de %.1f ms%s", g->e->dev_rate, g->e->dev_latency_ms,
+                               g->e->exclusive && !g->e->exclusive_failed ? " · exclusivo" : "");
+    else snprintf(t, sizeof t, "Áudio desligado");
+    ui_led(x + 5, r.y + 124, 4, g->e->dev_ok, C_GREEN);
+    ui_text(t, x + 16, r.y + 116, 12.5f, UI_SEMIBOLD, g->e->dev_ok ? C_TEXT : C_RED);
+    if (g->audio_error[0]) ui_text(g->audio_error, x + 16, r.y + 136, 12, UI_REGULAR, C_RED);
+
+    /* tamanho do buffer */
+    ui_text("Tamanho do buffer", x, r.y + 162, 11, UI_REGULAR, C_TEXT2);
+    static const int sizes[4] = {64, 128, 256, 512};
+    int cur = g->e->period_frames > 0 ? g->e->period_frames : FRAMES_PER_BUFFER, sel = 1;
+    for (int i = 0; i < 4; i++) if (sizes[i] == cur) sel = i;
+    if (ui_segmented((Rectangle){x, r.y + 180, w, 38}, "64 · 1,3 ms;128 · 2,7 ms;256 · 5,3 ms;512 · 10,7 ms", &sel, C_CYAN, C_CYAN_BG, C_CYAN_HI)) {
+        g->e->period_frames = sizes[sel];
+        apply_audio(g);
+        char m[120];
+        snprintf(m, sizeof m, "Buffer de %d amostras. Se ouvir estalos, aumente.", sizes[sel]);
+        set_status(g, m);
+    }
+    ui_text("Menor = menos atraso. Se aparecerem estalos, use um valor maior.", x, r.y + 226, 12, UI_REGULAR, C_TEXT2);
+
+    /* modo exclusivo */
+#ifdef _WIN32
+    bool ex = g->e->exclusive;
+    ui_text("Modo exclusivo (WASAPI)", x, r.y + 262, 12.5f, UI_SEMIBOLD, C_TEXT);
+    ui_text("Menos atraso no Windows; outros programas ficam sem som.", x, r.y + 282, 12, UI_REGULAR, C_TEXT2);
+    if (ui_switch((Rectangle){x + w - 44, r.y + 264, 44, 24}, &ex, C_CYAN)) {
+        g->e->exclusive = ex;
+        apply_audio(g);
+        if (ex && g->e->exclusive_failed) set_status(g, "A placa não aceitou o modo exclusivo; usando o compartilhado.");
+    }
+#else
+    ui_text("Modo exclusivo", x, r.y + 262, 12.5f, UI_SEMIBOLD, C_TEXT2);
+    ui_text("Só no Windows. No Linux, use PipeWire/JACK com buffer pequeno.", x, r.y + 282, 12, UI_REGULAR, C_TEXT2);
+#endif
     if (ui_pressed_outside(r)) g->audio_open = false;
     if (IsKeyPressed(KEY_ESCAPE)) g->audio_open = false;
 }
@@ -1458,11 +1602,6 @@ int gui_run(Engine *e, const GuiOptions *opt)
     g->drag_fx = -1;
     for (int i = 0; i < 64; i++) g->key_note[i] = -1;
     snprintf(g->preset_name, sizeof g->preset_name, "Inicial");
-    if (opt) g->tab = opt->start_tab;
-    if (opt && opt->start_preset > 0 && opt->start_preset < factory_preset_count()) {
-        g->preset_active = opt->start_preset;
-        snprintf(g->preset_name, sizeof g->preset_name, "%s", factory_preset_name(opt->start_preset));
-    }
 
     SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT | FLAG_VSYNC_HINT | FLAG_WINDOW_HIGHDPI);
     InitWindow(opt && opt->width ? opt->width : UI_W, opt && opt->height ? opt->height : UI_H, "Sintetizador");
@@ -1473,9 +1612,19 @@ int gui_run(Engine *e, const GuiOptions *opt)
 
     build_device_lists(g);
     build_preset_list(g);
+    if (!(opt && opt->no_settings)) load_settings(g);
+    if (opt && opt->start_preset >= 0 && opt->start_preset < factory_preset_count()) {
+        factory_preset_apply(opt->start_preset);
+        g->preset_active = opt->start_preset;
+        snprintf(g->preset_name, sizeof g->preset_name, "%s", factory_preset_name(opt->start_preset));
+    }
+    if (opt && opt->start_mode >= 0) param_set(P_INPUT_MODE, (float)opt->start_mode);
+    if (opt && opt->start_tab) g->tab = opt->start_tab;
     g->last_mode = param_geti(P_INPUT_MODE);
     apply_audio(g);
     apply_midi(g);
+    g->mout_last_src = param_geti(P_MOUT_SRC);
+    if (g->mout_last_src) apply_midi_out(g);
     if (!g->status[0]) set_status(g, "Pronto! Toque pelo teclado do computador, pelo piano ou escolha outra entrada.");
 
     int frame = 0;
@@ -1527,6 +1676,7 @@ int gui_run(Engine *e, const GuiOptions *opt)
         draw_scope(g, (Rectangle){12, 572, 1256, 46});
         draw_piano(g, (Rectangle){12, 634, 1256, 130});
         draw_status_bar(g);
+        ui_modal_content();
         if (g->save_open) draw_save_popup(g);
         if (g->audio_open) draw_audio_dialog(g);
         ui_end_frame();
@@ -1537,6 +1687,7 @@ int gui_run(Engine *e, const GuiOptions *opt)
     }
 
     if (recorder_active(&g->rec)) toggle_recording(g);
+    if (!(opt && opt->no_settings)) save_settings(g);
     ui_shutdown();
     CloseWindow();
     return 0;
