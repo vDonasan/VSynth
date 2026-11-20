@@ -93,9 +93,10 @@ Do Linux para Windows (como os downloads são feitos):
 `cmake -B build-win -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-w64.cmake`.
 
 **Downloads automáticos:** `.github/workflows/release.yml` compila e testa nos
-três sistemas a cada envio. Para publicar uma versão nova:
-`git tag v1.1.0 && git push --tags`; a Release aparece sozinha com os três
-arquivos.
+três sistemas a cada envio. Para publicar uma versão nova, na página do
+repositório: **Releases → Draft a new release**, crie a etiqueta (ex.: `v1.1.0`)
+e clique em **Publish release**. Em poucos minutos os três downloads são
+anexados sozinhos. (Também funciona com `git tag v1.1.0 && git push --tags`.)
 
 **ASIO (menos atraso no Windows).** O build do Windows já vem com suporte
 aos drivers ASIO das interfaces de áudio. Na engrenagem (Configurações de
