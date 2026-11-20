@@ -71,6 +71,54 @@ if(SYNTH_MIDI)
   target_link_libraries(synth PRIVATE portmidi)
 endif()
 
+# ASIO (só Windows): drivers de baixa latência das interfaces de áudio.
+# Usa o PortAudio com o SDK ASIO 2.3 da Steinberg, sob a licença GPLv3
+# (por isso o projeto inteiro é GPLv3). Por padrão o SDK vem do espelho
+# jcelerier/asio-2; para usar o ZIP oficial da Steinberg já extraído:
+#   -DASIOSDK_DIR=C:/caminho/asiosdk
+if(WIN32)
+  option(SYNTH_ASIO "Suporte a drivers ASIO (SDK da Steinberg, GPLv3)" ON)
+  set(ASIOSDK_DIR "" CACHE PATH "Pasta do SDK ASIO (vazio = baixar)")
+endif()
+if(WIN32 AND SYNTH_ASIO)
+  enable_language(CXX)
+  if(ASIOSDK_DIR)
+    set(ASIO_ROOT ${ASIOSDK_DIR})
+  else()
+    FetchContent_Declare(asiosdk
+      GIT_REPOSITORY https://github.com/jcelerier/asio-2.git
+      GIT_TAG 1bc070d1c7b8f0bf92f9d3b7c72e5880a7dcffdb)
+    FetchContent_Populate(asiosdk)
+    set(ASIO_ROOT ${asiosdk_SOURCE_DIR})
+  endif()
+  # mesmo conserto que o PortAudio aplica (new[] liberado com delete)
+  file(READ "${ASIO_ROOT}/host/pc/asiolist.cpp" _asiolist)
+  string(REPLACE "delete lpdrv" "delete[] lpdrv" _asiolist "${_asiolist}")
+  file(WRITE "${CMAKE_BINARY_DIR}/asio_patched/asiolist.cpp" "${_asiolist}")
+  add_library(ASIO::host INTERFACE IMPORTED)
+  target_sources(ASIO::host INTERFACE
+    "${ASIO_ROOT}/common/asio.cpp"
+    "${ASIO_ROOT}/host/asiodrivers.cpp"
+    "${CMAKE_BINARY_DIR}/asio_patched/asiolist.cpp")
+  target_include_directories(ASIO::host INTERFACE
+    "${ASIO_ROOT}/common" "${ASIO_ROOT}/host" "${ASIO_ROOT}/host/pc")
+  target_link_libraries(ASIO::host INTERFACE ole32 uuid)
+
+  # PortAudio só com o ASIO: o resto do áudio continua no miniaudio
+  set(PA_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+  set(PA_USE_ASIO ON CACHE BOOL "" FORCE)
+  foreach(api DS WMME WASAPI WDMKS WDMKS_DEVICE_INFO)
+    set(PA_USE_${api} OFF CACHE BOOL "" FORCE)
+  endforeach()
+  FetchContent_Declare(portaudio
+    GIT_REPOSITORY https://github.com/PortAudio/portaudio.git
+    GIT_TAG e8138474e338f545361065776a30878022c26106)
+  FetchContent_MakeAvailable(portaudio)
+  target_sources(synthcore PRIVATE src/audio_asio.c)
+  target_compile_definitions(synthcore PRIVATE HAVE_ASIO)
+  target_link_libraries(synthcore PUBLIC portaudio)
+endif()
+
 if(MSVC)
   target_compile_options(synthcore PRIVATE /W3)
 else()

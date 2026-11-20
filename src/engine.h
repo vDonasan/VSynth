@@ -32,6 +32,7 @@ typedef struct EngineAudio EngineAudio;
 typedef struct {
     char name[256];
     int  is_default;
+    int  asio;      /* >= 0: driver ASIO (entrada e saída juntas); -1: miniaudio */
 } AudioDevice;
 
 typedef struct {
@@ -55,6 +56,8 @@ typedef struct {
     int         period_frames;  /* tamanho do buffer pedido (64, 128, 256...) */
     int         exclusive;      /* modo exclusivo (WASAPI no Windows): menos atraso */
     int         exclusive_failed;
+    int         asio_open;      /* o dispositivo aberto é um driver ASIO */
+    char        asio_error[256];
     float       dev_latency_ms; /* tamanho do buffer em ms */
     AudioDevice play[MAX_AUDIO_DEVS], cap[MAX_AUDIO_DEVS];
     int         nplay, ncap;
@@ -108,6 +111,8 @@ int  engine_refresh_devices(Engine *e);
 int  engine_open(Engine *e, int play, int cap, int cap_channel);
 void engine_close(Engine *e);
 int  engine_capture_channels(Engine *e);
+int  engine_has_asio(void);          /* compilado com suporte a ASIO */
+void engine_asio_panel(Engine *e);   /* abre o painel do driver ASIO */
 
 /* Notas que o harmonizador acrescenta a `note` (até 2); retorna quantas. */
 int  engine_harmony_notes(int note, int out[2]);

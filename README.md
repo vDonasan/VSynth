@@ -56,6 +56,16 @@ atômicos do C11.
 
 Sem MIDI: `cmake -B build -DSYNTH_MIDI=OFF`.
 
+**ASIO (menos atraso no Windows).** O build do Windows já vem com suporte
+aos drivers ASIO das interfaces de áudio. Na engrenagem (Configurações de
+áudio), escolha a saída `ASIO: nome da sua interface`: a entrada da
+guitarra passa a vir do mesmo driver, e o botão **Painel do driver** abre o
+painel do fabricante. Se o driver recusar 48000 Hz, mude a taxa nesse
+painel. O SDK ASIO 2.3 da Steinberg é baixado sozinho na configuração (do
+espelho `jcelerier/asio-2`); para usar o ZIP oficial já extraído:
+`cmake -B build -DASIOSDK_DIR=C:/caminho/asiosdk`. Sem ASIO:
+`-DSYNTH_ASIO=OFF`.
+
 ## Como usar
 
 ### 1. Escolha a entrada (painel da esquerda)
@@ -184,3 +194,10 @@ Os testes:
 Para testar a interface sem placa de som: `./build/synth --null-audio`.
 Para gerar uma captura da tela: `--screenshot tela.png`, com `--tab N`,
 `--mode N` e `--preset N` para escolher o que aparece.
+
+## Licença
+
+GPLv3 (arquivo `LICENSE`). O suporte a ASIO usa o SDK ASIO da Steinberg na
+opção de licença GPLv3, o que exige que o programa inteiro também seja GPLv3.
+ASIO é marca registrada da Steinberg Media Technologies GmbH.
+A fonte Inter usa a licença SIL Open Font License (`assets/fonts/OFL-Inter.txt`).

@@ -164,6 +164,12 @@ static void build_device_lists(Gui *g)
     build_channel_list(g);
 }
 
+static bool out_is_asio(Gui *g)
+{
+    int i = g->out_active - 1;
+    return i >= 0 && i < g->e->nplay && g->e->play[i].asio >= 0;
+}
+
 static void apply_audio(Gui *g)
 {
     int mode = param_geti(P_INPUT_MODE);
@@ -172,6 +178,8 @@ static void apply_audio(Gui *g)
     if (engine_open(g->e, g->out_active - 1, cap, g->in_ch) < 0) {
         if (cap != -2 && engine_open(g->e, g->out_active - 1, -2, 0) == 0)
             snprintf(g->audio_error, sizeof g->audio_error, "Não abriu a entrada de áudio. Tente outro dispositivo.");
+        else if (g->e->asio_error[0])
+            snprintf(g->audio_error, sizeof g->audio_error, "%s", g->e->asio_error);
         else
             snprintf(g->audio_error, sizeof g->audio_error, "Não abriu a saída de áudio!");
         set_status(g, g->audio_error);
@@ -848,7 +856,16 @@ static void input_guitar(Gui *g, Rectangle p)
     float x = p.x + 14, w = p.width - 28, y = p.y + 92;
     ui_text("Interface de áudio", x, y, 11, UI_REGULAR, C_TEXT2);
     ui_text("Canal", x + w - 64, y, 11, UI_REGULAR, C_TEXT2);
-    if (ui_dropdown((Rectangle){x, y + 17, w - 72, 34}, g->in_items, &g->in_active, DD_IN)) apply_audio(g);
+    if (out_is_asio(g)) {
+        /* no ASIO a entrada é a do mesmo driver da saída */
+        Rectangle lr = {x, y + 17, w - 72, 34};
+        ui_rect(lr, 9, C_WELL);
+        char nm[256];
+        snprintf(nm, sizeof nm, "%s", g->e->play[g->out_active - 1].name);
+        while (strlen(nm) > 4 && ui_text_width(nm, 12.5f, UI_REGULAR) > w - 92) strcpy(nm + strlen(nm) - 4, "...");
+        ui_text(nm, x + 10, y + 26, 12.5f, UI_REGULAR, C_TEXT2);
+        ui_tooltip(lr, "Com ASIO, a entrada é a do mesmo driver escolhido como saída (engrenagem lá em cima).");
+    } else if (ui_dropdown((Rectangle){x, y + 17, w - 72, 34}, g->in_items, &g->in_active, DD_IN)) apply_audio(g);
     if (ui_dropdown((Rectangle){x + w - 64, y + 17, 64, 34}, g->ch_items, &g->in_ch, DD_CH)) atomic_store(&e->cap_channel, g->in_ch);
     ui_tooltip((Rectangle){x + w - 64, y + 17, 64, 34}, "Em qual entrada da interface a guitarra está ligada.");
 
@@ -1760,7 +1777,7 @@ static void draw_audio_dialog(Gui *g)
     if (ui_button((Rectangle){x + w - 38, r.y + 70, 38, 34}, "@refresh", UI_BTN_NORMAL)) { build_device_lists(g); apply_audio(g); }
     char t[160];
     if (g->e->dev_ok) snprintf(t, sizeof t, "Funcionando: %u Hz · buffer de %.1f ms%s", g->e->dev_rate, g->e->dev_latency_ms,
-                               g->e->exclusive && !g->e->exclusive_failed ? " · exclusivo" : "");
+                               g->e->asio_open ? " · ASIO" : (g->e->exclusive && !g->e->exclusive_failed ? " · exclusivo" : ""));
     else snprintf(t, sizeof t, "Áudio desligado");
     ui_led(x + 5, r.y + 124, 4, g->e->dev_ok, C_GREEN);
     ui_text(t, x + 16, r.y + 116, 12.5f, UI_SEMIBOLD, g->e->dev_ok ? C_TEXT : C_RED);
@@ -1781,8 +1798,15 @@ static void draw_audio_dialog(Gui *g)
     }
     ui_text("Menor = menos atraso. Se aparecerem estalos, use um valor maior.", x, r.y + 226, 12, UI_REGULAR, C_TEXT2);
 
-    /* modo exclusivo */
+    /* modo exclusivo / ASIO */
 #ifdef _WIN32
+    if (out_is_asio(g)) {
+        ui_text("Driver ASIO", x, r.y + 262, 12.5f, UI_SEMIBOLD, C_TEXT);
+        ui_text("Entrada e saída passam direto pelo driver da interface.", x, r.y + 282, 12, UI_REGULAR, C_TEXT2);
+        Rectangle pb = {x + w - 150, r.y + 258, 150, 32};
+        ui_tooltip(pb, "Abre o painel do fabricante para mudar o buffer e a taxa de amostragem do driver.");
+        if (ui_button(pb, "@gear Painel do driver", UI_BTN_NORMAL)) engine_asio_panel(g->e);
+    } else {
     bool ex = g->e->exclusive;
     ui_text("Modo exclusivo (WASAPI)", x, r.y + 262, 12.5f, UI_SEMIBOLD, C_TEXT);
     ui_text("Menos atraso no Windows; outros programas ficam sem som.", x, r.y + 282, 12, UI_REGULAR, C_TEXT2);
@@ -1791,6 +1815,7 @@ static void draw_audio_dialog(Gui *g)
         g->e->exclusive = ex;
         apply_audio(g);
         if (ex && g->e->exclusive_failed) set_status(g, "A placa não aceitou o modo exclusivo; usando o compartilhado.");
+    }
     }
 #else
     ui_text("Modo exclusivo", x, r.y + 262, 12.5f, UI_SEMIBOLD, C_TEXT2);

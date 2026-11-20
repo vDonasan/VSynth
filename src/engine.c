@@ -1,4 +1,7 @@
 #include "engine.h"
+#ifdef HAVE_ASIO
+#include "audio_asio.h"
+#endif
 
 #include <math.h>
 #include <stdio.h>
@@ -73,6 +76,9 @@ int engine_init(Engine *e, float sr)
 void engine_free(Engine *e)
 {
     engine_close(e);
+#ifdef HAVE_ASIO
+    asio_shutdown();
+#endif
     if (e->audio && e->audio->ctx_ok) ma_context_uninit(&e->audio->ctx);
     free(e->audio);
     e->audio = NULL;
@@ -446,6 +452,18 @@ void engine_process(Engine *e, const float *in, int in_channels, float *out, int
 /* ------------------------------------------------------------------ */
 /* Dispositivos (miniaudio)                                            */
 /* ------------------------------------------------------------------ */
+#ifdef HAVE_ASIO
+static void asio_process(void *user, const float *in, int in_channels, float *out, int frames)
+{
+    engine_process(user, in, in_channels, out, frames);
+}
+int engine_has_asio(void) { return 1; }
+void engine_asio_panel(Engine *e) { (void)e; asio_control_panel(); }
+#else
+int engine_has_asio(void) { return 0; }
+void engine_asio_panel(Engine *e) { (void)e; }
+#endif
+
 static void data_callback(ma_device *d, void *out, const void *in, ma_uint32 frames)
 {
     Engine *e = d->pUserData;
@@ -469,7 +487,20 @@ int engine_refresh_devices(Engine *e)
         snprintf(e->play[i].name, sizeof e->play[i].name, "%s", pi[i].name);
         a->play_id[i] = pi[i].id;
         e->play[i].is_default = pi[i].isDefault;
+        e->play[i].asio = -1;
     }
+#ifdef HAVE_ASIO
+    /* os drivers ASIO entram no fim da lista de saídas */
+    if (!e->null_backend) {
+        int na = asio_driver_count();
+        for (int k = 0; k < na && e->nplay < MAX_AUDIO_DEVS; k++) {
+            AudioDevice *d = &e->play[e->nplay++];
+            snprintf(d->name, sizeof d->name, "ASIO: %s", asio_driver_name(k));
+            d->is_default = 0;
+            d->asio = k;
+        }
+    }
+#endif
     for (int i = 0; i < e->ncap; i++) {
         snprintf(e->cap[i].name, sizeof e->cap[i].name, "%s", ci[i].name);
         a->cap_id[i] = ci[i].id;
@@ -483,6 +514,28 @@ int engine_open(Engine *e, int play, int cap, int cap_channel)
     EngineAudio *a = e->audio;
     engine_close(e);
     if (!a->ctx_ok && engine_refresh_devices(e) < 0) return -1;
+    e->asio_error[0] = 0;
+#ifdef HAVE_ASIO
+    if (play >= 0 && play < e->nplay && e->play[play].asio >= 0) {
+        int frames = 0;
+        if (cap != -2) guitar_start(&e->guitar);
+        atomic_store(&e->cap_channel, cap_channel);
+        e->asio_open = 1;
+        e->dev_ok    = 1; /* antes de abrir: o callback já pode chegar */
+        if (asio_open(e->play[play].asio, e->sr, e->period_frames, cap != -2, asio_process, e, &frames) < 0) {
+            snprintf(e->asio_error, sizeof e->asio_error, "%s", asio_error());
+            e->dev_ok = e->asio_open = 0;
+            guitar_stop(&e->guitar);
+            return -1;
+        }
+        e->exclusive_failed = 0;
+        e->dev_rate       = (unsigned)e->sr;
+        e->dev_latency_ms = 1000.0f * frames / e->sr;
+        snprintf(e->dev_name, sizeof e->dev_name, "%s", e->play[play].name);
+        snprintf(e->cap_name, sizeof e->cap_name, "%s", cap == -2 ? "" : e->play[play].name);
+        return 0;
+    }
+#endif
 
     ma_device_config cfg = ma_device_config_init(cap == -2 ? ma_device_type_playback : ma_device_type_duplex);
     cfg.sampleRate         = (ma_uint32)e->sr;
@@ -523,6 +576,12 @@ int engine_open(Engine *e, int play, int cap, int cap_channel)
 
 void engine_close(Engine *e)
 {
+#ifdef HAVE_ASIO
+    if (e->asio_open) {
+        asio_close();
+        e->asio_open = e->dev_ok = 0;
+    }
+#endif
     if (e->dev_ok) {
         ma_device_uninit(&e->audio->dev); /* para o callback antes de mexer no resto */
         e->dev_ok = 0;
@@ -532,5 +591,8 @@ void engine_close(Engine *e)
 
 int engine_capture_channels(Engine *e)
 {
+#ifdef HAVE_ASIO
+    if (e->asio_open) return asio_input_channels();
+#endif
     return (e->dev_ok && e->audio->dev.type == ma_device_type_duplex) ? (int)e->audio->dev.capture.channels : 0;
 }
