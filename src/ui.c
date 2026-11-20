@@ -50,6 +50,9 @@ static struct {
 
     bool   learn;
     int    learn_target;
+
+    bool   modal;
+    Rectangle modal_rect;
 } U;
 
 /* ------------------------------------------------------------------ */
@@ -255,6 +258,7 @@ void ui_icon(const char *n, float x, float y, float s, Color c)
     if (!strcmp(n, "chev-down"))       { L(3.5f, 5, 7, 8.5f); L(7, 8.5f, 10.5f, 5); }
     else if (!strcmp(n, "chev-left"))  { L(9, 2.5f, 4.5f, 7); L(4.5f, 7, 9, 11.5f); }
     else if (!strcmp(n, "chev-right")) { L(5, 2.5f, 9.5f, 7); L(9.5f, 7, 5, 11.5f); }
+    else if (!strcmp(n, "x"))          { L(3.5f, 3.5f, 10.5f, 10.5f); L(10.5f, 3.5f, 3.5f, 10.5f); }
     else if (!strcmp(n, "plus"))       { L(7, 2.5f, 7, 11.5f); L(2.5f, 7, 11.5f, 7); }
     else if (!strcmp(n, "minus"))      { L(2.5f, 7, 11.5f, 7); }
     else if (!strcmp(n, "arrow"))      { L(1.5f, 7, 12, 7); L(8.5f, 3.5f, 12, 7); L(12, 7, 8.5f, 10.5f); }
@@ -295,7 +299,15 @@ bool ui_typing(void) { return U.focus != 0; }
 bool ui_hover(Rectangle r)
 {
     if (U.dd_open || (U.active && !U.down)) return false;
+    if (U.modal && !CheckCollisionPointRec(U.mouse, U.modal_rect)) return false;
     return CheckCollisionPointRec(U.mouse, r);
+}
+
+void ui_set_modal(bool on, Rectangle r) { U.modal = on; U.modal_rect = r; }
+
+bool ui_pressed_outside(Rectangle r)
+{
+    return U.pressed && !U.dd_open && !CheckCollisionPointRec(U.mouse, r);
 }
 
 bool ui_pressed(Rectangle r) { return U.pressed && !U.active && ui_hover(r); }
@@ -527,6 +539,12 @@ static void draw_dropdown_overlay(void)
     if (IsKeyPressed(KEY_ESCAPE)) U.dd_open = 0;
 }
 
+void ui_focus(int id)
+{
+    U.focus = id;
+    while (GetCharPressed() > 0) {} /* descarta o que foi digitado antes */
+}
+
 bool ui_textbox(Rectangle r, char *buf, int cap, int id, const char *placeholder)
 {
     bool hov = ui_hover(r), focused = U.focus == id, enter = false;
@@ -553,7 +571,7 @@ bool ui_textbox(Rectangle r, char *buf, int cap, int id, const char *placeholder
     ui_rect(r, 9, focused ? C_WELL : C_CTRL);
     ui_rect_lines(r, 9, 1, focused ? C_CYAN_BD : C_BORDER2);
     float ty = r.y + (r.height - 15) / 2;
-    if (!buf[0] && !focused && placeholder) ui_text(placeholder, r.x + 10, ty, 12.5f, UI_REGULAR, C_TEXT2);
+    if (!buf[0] && placeholder) ui_text(placeholder, r.x + 10, ty, 12.5f, UI_REGULAR, C_TEXT2);
     else ui_text(buf, r.x + 10, ty, 12.5f, UI_REGULAR, C_TEXT);
     if (focused && fmodf((float)GetTime(), 1.0f) < 0.55f) {
         float cx = r.x + 10 + ui_text_width(buf, 12.5f, UI_REGULAR) + 1;
@@ -647,7 +665,10 @@ static bool knob_core(float cx, float cy, float size, int param, Color accent, c
     ui_text_center(val, (Rectangle){cx - 60, vy, 120, 15}, 12, UI_SEMIBOLD, C_TEXT);
     char cap[48];
     snprintf(cap, sizeof cap, "%s", label ? label : d->label);
-    for (char *p = cap; *p; p++) if (*p >= 'a' && *p <= 'z') *p -= 32;
+    for (unsigned char *p = (unsigned char *)cap; *p; p++) { /* maiúsculas, inclusive acentos (UTF-8 Latin-1) */
+        if (*p >= 'a' && *p <= 'z') *p -= 32;
+        else if (*p == 0xC3 && p[1] >= 0xA0 && p[1] <= 0xBE && p[1] != 0xB7) { p[1] -= 0x20; p++; }
+    }
     ui_text_center(cap, (Rectangle){cx - 60, vy + 17, 120, 13}, 10.5f, UI_SEMIBOLD, C_TEXT2);
     return changed;
 }

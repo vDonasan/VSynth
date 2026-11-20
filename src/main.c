@@ -15,6 +15,7 @@
 #include <string.h>
 
 #include "config.h"
+#include "raylib.h"
 #include "engine.h"
 #include "gui.h"
 #include "midi.h"
@@ -44,6 +45,7 @@ int main(int argc, char **argv)
         }
     }
 
+    SetTraceLogLevel(LOG_ERROR); /* esconde as mensagens informativas do raylib */
     static Engine engine;
     if (engine_init(&engine, SAMPLE_RATE) < 0) {
         fprintf(stderr, "Sem memória para o motor de áudio\n");

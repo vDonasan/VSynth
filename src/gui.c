@@ -1,14 +1,13 @@
 /*
- * Interface gráfica (raylib + raygui).
+ * Interface gráfica — layout do mockup "Sintetizador — interface nova".
  *
- * Tudo é desenhado numa tela virtual de 1280x800 que é escalada para o
- * tamanho da janela, então funciona em telas menores (ex.: 1366x768).
+ *  ┌ barra: logo · preset ‹ › · salvar · ⚙ áudio · MIDI learn · gravar · pânico · volume ┐
+ *  ├ ENTRADA (teclado / MIDI / guitarra) ┬ abas: Som · Efeitos · Modulação · Arp/Harmonia · Looper · Saída MIDI ┤
+ *  ├ osciloscópio ───────────────────────┴───────────────────────────────────────────────┤
+ *  ├ piano clicável ─────────────────────────────────────────────────────────────────────┤
+ *  └ barra de status ────────────────────────────────────────────────────────────────────┘
  *
- *  ┌ barra superior: presets · MIDI learn · gravar · pânico · volume ┐
- *  ├ ENTRADA (teclado/MIDI/guitarra) ┬ abas: Som · Efeitos · Modulação · Arpejador · Looper ┤
- *  ├ osciloscópio ───────────────────┴────────────────────────────────────────────────┤
- *  ├ piano clicável ─────────────────────────────────────────────────────────────────┤
- *  └ barra de status ────────────────────────────────────────────────────────────────┘
+ * Os widgets (knobs, botões, listas...) estão em ui.c.
  */
 #include <math.h>
 #include <stdio.h>
@@ -17,9 +16,6 @@
 #include <time.h>
 
 #include "raylib.h"
-#define RAYGUI_IMPLEMENTATION
-#include "raygui.h"
-#include "dark/style_dark.h"
 
 #include "engine.h"
 #include "fx.h"
@@ -28,53 +24,41 @@
 #include "params.h"
 #include "pitch.h"
 #include "recorder.h"
+#include "ui.h"
 
-#define W 1280
-#define H 800
 #define PRESET_DIR "presets"
 #define REC_DIR    "gravacoes"
 #define MAX_USER_PRESETS 64
 
-/* ------------------------------------------------------------------ */
-/* Estado da interface                                                 */
-/* ------------------------------------------------------------------ */
-typedef struct {
-    Rectangle   r;
-    const char *items;
-    int        *active;
-    bool       *edit;
-    int         id;
-} Dropdown;
-
-enum { DD_PRESET, DD_OUT, DD_IN, DD_MIDI, DD_MOUT };
+enum { DD_PRESET = 1, DD_OUT, DD_IN, DD_MIDI, DD_MOUT, DD_CH, DD_MOD = 20 };
+enum { TB_SAVE = 1 };
 
 typedef struct {
     Engine *e;
     int     tab;
 
     /* dispositivos */
-    char out_items[4096], in_items[4096], midi_items[4096], mout_items[4096];
+    char out_items[4096], in_items[4096], midi_items[4096], mout_items[4096], ch_items[256];
     int  out_active, in_active, midi_active, mout_active, in_ch;
-    bool out_edit, in_edit, midi_edit, mout_edit, ch_edit;
-    int  mout_last_src, mout_seen;
-    double mout_blink;
     char audio_error[256];
 
     /* presets */
     char preset_items[8192];
     char user_presets[MAX_USER_PRESETS][128];
     int  n_user, preset_active;
-    bool preset_edit, name_edit;
-    char preset_name[64], name_backup[64];
+    char preset_name[64];
+    bool save_open;
+    char save_name[64];
+
+    /* janela de áudio */
+    bool audio_open;
 
     /* MIDI learn */
-    bool learn;
-    int  learn_target, learn_seen;
+    int  learn_seen;
 
     /* notas tocadas pela interface */
     int  key_note[64];
     int  mouse_note;
-    bool sustain;
 
     /* gravação */
     Recorder rec;
@@ -90,15 +74,13 @@ typedef struct {
     double tuner_time;
     double taps[4];
     int    ntaps;
+    int    last_mode, mout_last_src, mout_seen;
+    double mout_blink;
 
-    Dropdown dd[6];
-    int      ndd;
-    int      last_mode;
+    /* arrastar pedais */
+    int   drag_fx;   /* posição (slot) sendo arrastada, -1 = nenhuma */
+    float drag_off;
 } Gui;
-
-static Font  g_font;
-static int   g_text;
-static Color C_BG, C_LINE, C_TEXT, C_DIM, C_ACCENT, C_PANEL;
 
 /* ------------------------------------------------------------------ */
 /* Utilidades                                                          */
@@ -109,132 +91,84 @@ static void set_status(Gui *g, const char *msg)
     g->status_time = GetTime();
 }
 
-static void text(const char *s, float x, float y, Color c)
+static void append_item(char *list, size_t cap, const char *item)
 {
-    DrawTextEx(g_font, s, (Vector2){x, y}, (float)g_text, 1, c);
+    if (list[0]) strncat(list, ";", cap - strlen(list) - 1);
+    /* ';' separa itens: troca por ',' se aparecer no nome */
+    size_t l = strlen(list);
+    for (const char *p = item; *p && l + 1 < cap; p++) list[l++] = *p == ';' ? ',' : *p;
+    list[l] = 0;
 }
 
-static void text_size(const char *s, float x, float y, float size, Color c)
-{
-    DrawTextEx(g_font, s, (Vector2){x, y}, size, 1, c);
-}
-
-static void defer_dropdown(Gui *g, Rectangle r, const char *items, int *active, bool *edit, int id)
-{
-    if (g->ndd < 6) g->dd[g->ndd++] = (Dropdown){r, items, active, edit, id};
-}
-
-static bool any_dropdown_open(Gui *g)
-{
-    return g->out_edit || g->in_edit || g->midi_edit || g->preset_edit || g->mout_edit;
-}
-
-/* Desenha o controle adequado ao tipo do parâmetro:
-   [rótulo] [slider/combobox/checkbox] [valor] */
-static void pcontrol_ex(Gui *g, Rectangle row, int id, float label_w, float value_w)
-{
-    const ParamDef *d = param_def(id);
-    bool was_locked = GuiIsLocked();
-    bool learnable = !(d->flags & F_HIDDEN);
-    if (g->learn) GuiLock();
-
-    Rectangle lab = {row.x, row.y, label_w, row.height};
-    Rectangle ctl = {row.x + label_w, row.y, row.width - label_w - value_w, row.height};
-    Rectangle val = {ctl.x + ctl.width + 8, row.y, value_w - 8, row.height};
-
-    if (d->kind == K_BOOL) {
-        bool on = param_geti(id);
-        Rectangle box = {row.x, row.y + (row.height - 20) / 2, 20, 20};
-        if (GuiCheckBox(box, d->label, &on) || on != (bool)param_geti(id)) param_set(id, on);
-        ctl = (Rectangle){row.x, row.y, row.width, row.height};
-    } else {
-        GuiLabel(lab, d->label);
-        if (d->kind == K_CHOICE) {
-            int a = param_geti(id);
-            GuiComboBox(ctl, d->choices, &a);
-            if (a != param_geti(id)) param_set(id, (float)a);
-        } else {
-            float n = param_get_norm(id);
-            float before = n;
-            GuiSlider(ctl, NULL, NULL, &n, 0, 1);
-            if (n != before) param_set_norm(id, n);
-            char buf[32];
-            param_format(id, buf, sizeof buf);
-            GuiLabel(val, buf);
-        }
-    }
-
-    /* MIDI learn: CC atribuído aparece ao lado; clique escolhe o alvo */
-    int cc = midi_param_cc(id);
-    if (cc >= 0 && g->learn) {
-        char t[16];
-        snprintf(t, sizeof t, "CC%d", cc);
-        float tx = (d->kind == K_BOOL || value_w < 40) ? row.x + row.width - 48 : val.x;
-        DrawRectangle((int)tx - 2, (int)row.y + 2, 50, (int)row.height - 4, (Color){50, 35, 20, 255});
-        text(t, tx + 2, row.y + (row.height - g_text) / 2, C_ACCENT);
-    }
-    if (g->learn && learnable) {
-        Rectangle hit = d->kind == K_BOOL ? ctl : (Rectangle){row.x, row.y, row.width, row.height};
-        DrawRectangleLinesEx(hit, 1, Fade(C_ACCENT, 0.35f));
-        if (!was_locked && CheckCollisionPointRec(GetMousePosition(), hit)) {
-            if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-                g->learn_target = id;
-                midi_last_cc(&g->learn_seen);
-                char m[160];
-                snprintf(m, sizeof m, "MIDI learn: mova um knob/fader do seu controlador para \"%s\"", d->label);
-                set_status(g, m);
-            } else if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) && cc >= 0) {
-                midi_map(cc, -1);
-                midi_map_save("midi-learn.txt");
-                set_status(g, "MIDI learn: ligação removida");
-            }
-        }
-        if (g->learn_target == id) DrawRectangleLinesEx(hit, 2, C_ACCENT);
-    }
-    if (g->learn && !was_locked) GuiUnlock();
-}
-
-static void pcontrol(Gui *g, Rectangle row, int id) { pcontrol_ex(g, row, id, 118, 86); }
-
-static void group(Rectangle r, const char *title) { GuiGroupBox(r, title); }
+static float clampf(float x, float a, float b) { return x < a ? a : (x > b ? b : x); }
 
 /* ------------------------------------------------------------------ */
 /* Dispositivos                                                        */
 /* ------------------------------------------------------------------ */
+static void build_channel_list(Gui *g)
+{
+    int n = engine_capture_channels(g->e);
+    if (n < 1) n = 2;
+    g->ch_items[0] = 0;
+    for (int i = 0; i < n && i < 32; i++) {
+        char t[8];
+        snprintf(t, sizeof t, "%d", i + 1);
+        append_item(g->ch_items, sizeof g->ch_items, t);
+    }
+    if (g->in_ch >= n) g->in_ch = 0;
+}
+
 static void build_device_lists(Gui *g)
 {
     Engine *e = g->e;
     engine_refresh_devices(e);
-    snprintf(g->out_items, sizeof g->out_items, "Padrão do sistema");
-    for (int i = 0; i < e->nplay; i++) {
-        strncat(g->out_items, ";", sizeof g->out_items - strlen(g->out_items) - 1);
-        strncat(g->out_items, e->play[i].name, sizeof g->out_items - strlen(g->out_items) - 1);
-    }
-    snprintf(g->in_items, sizeof g->in_items, "Padrão do sistema");
-    for (int i = 0; i < e->ncap; i++) {
-        strncat(g->in_items, ";", sizeof g->in_items - strlen(g->in_items) - 1);
-        strncat(g->in_items, e->cap[i].name, sizeof g->in_items - strlen(g->in_items) - 1);
-    }
+    g->out_items[0] = g->in_items[0] = 0;
+    append_item(g->out_items, sizeof g->out_items, "Padrão do sistema");
+    for (int i = 0; i < e->nplay; i++) append_item(g->out_items, sizeof g->out_items, e->play[i].name);
+    append_item(g->in_items, sizeof g->in_items, "Padrão do sistema");
+    for (int i = 0; i < e->ncap; i++) append_item(g->in_items, sizeof g->in_items, e->cap[i].name);
+
     int n = midi_refresh();
-    if (n == 0) snprintf(g->midi_items, sizeof g->midi_items, midi_available() ? "(nenhum dispositivo)" : "(sem suporte a MIDI)");
-    else {
-        g->midi_items[0] = 0;
-        for (int i = 0; i < n; i++) {
-            if (i) strncat(g->midi_items, ";", sizeof g->midi_items - strlen(g->midi_items) - 1);
-            strncat(g->midi_items, midi_device_name(i), sizeof g->midi_items - strlen(g->midi_items) - 1);
-        }
-    }
+    g->midi_items[0] = 0;
+    if (n == 0) append_item(g->midi_items, sizeof g->midi_items, midi_available() ? "(nenhum dispositivo)" : "(sem suporte a MIDI)");
+    for (int i = 0; i < n; i++) append_item(g->midi_items, sizeof g->midi_items, midi_device_name(i));
     if (g->midi_active >= n) g->midi_active = 0;
 
-    /* saída MIDI: porta virtual (Linux/macOS) + dispositivos */
     g->mout_items[0] = 0;
-    if (midi_virtual_supported()) snprintf(g->mout_items, sizeof g->mout_items, "Porta virtual \"Sintetizador\"");
-    for (int i = 0; i < midi_out_count(); i++) {
-        if (g->mout_items[0]) strncat(g->mout_items, ";", sizeof g->mout_items - strlen(g->mout_items) - 1);
-        strncat(g->mout_items, midi_out_name(i), sizeof g->mout_items - strlen(g->mout_items) - 1);
-    }
+    if (midi_virtual_supported()) append_item(g->mout_items, sizeof g->mout_items, "Porta virtual \"Sintetizador\"");
+    for (int i = 0; i < midi_out_count(); i++) append_item(g->mout_items, sizeof g->mout_items, midi_out_name(i));
     if (!g->mout_items[0])
-        snprintf(g->mout_items, sizeof g->mout_items, midi_available() ? "(nenhuma saída MIDI)" : "(sem suporte a MIDI)");
+        append_item(g->mout_items, sizeof g->mout_items, midi_available() ? "(nenhuma saída MIDI)" : "(sem suporte a MIDI)");
+    build_channel_list(g);
+}
+
+static void apply_audio(Gui *g)
+{
+    int mode = param_geti(P_INPUT_MODE);
+    int cap  = mode == 2 ? g->in_active - 1 : -2;
+    g->audio_error[0] = 0;
+    if (engine_open(g->e, g->out_active - 1, cap, g->in_ch) < 0) {
+        if (cap != -2 && engine_open(g->e, g->out_active - 1, -2, 0) == 0)
+            snprintf(g->audio_error, sizeof g->audio_error, "Não abriu a entrada de áudio. Tente outro dispositivo.");
+        else
+            snprintf(g->audio_error, sizeof g->audio_error, "Não abriu a saída de áudio!");
+        set_status(g, g->audio_error);
+    }
+    build_channel_list(g);
+    atomic_store(&g->e->cap_channel, g->in_ch);
+}
+
+static void apply_midi(Gui *g)
+{
+    if (param_geti(P_INPUT_MODE) != 1) { midi_close(); return; }
+    if (midi_refresh() == 0) { midi_close(); return; }
+    if (midi_open(g->midi_active, &g->e->q_midi) == 0) {
+        char m[200];
+        snprintf(m, sizeof m, "MIDI conectado: %s", midi_open_name());
+        set_status(g, m);
+    } else {
+        set_status(g, "Não foi possível abrir o dispositivo MIDI");
+    }
 }
 
 static void apply_midi_out(Gui *g)
@@ -258,33 +192,13 @@ static void apply_midi_out(Gui *g)
     }
 }
 
-static void apply_audio(Gui *g)
+static void refresh_all_devices(Gui *g)
 {
-    int mode = param_geti(P_INPUT_MODE);
-    int cap  = mode == 2 ? g->in_active - 1 : -2;
-    g->audio_error[0] = 0;
-    if (engine_open(g->e, g->out_active - 1, cap, g->in_ch) < 0) {
-        if (cap != -2 && engine_open(g->e, g->out_active - 1, -2, 0) == 0)
-            snprintf(g->audio_error, sizeof g->audio_error, "Não abriu a entrada de áudio. Tente outro dispositivo.");
-        else
-            snprintf(g->audio_error, sizeof g->audio_error, "Não abriu a saída de áudio!");
-        set_status(g, g->audio_error);
-    }
-    int chans = engine_capture_channels(g->e);
-    if (chans > 0 && g->in_ch >= chans) { g->in_ch = 0; atomic_store(&g->e->cap_channel, 0); }
-}
-
-static void apply_midi(Gui *g)
-{
-    if (param_geti(P_INPUT_MODE) != 1) { midi_close(); return; }
-    if (midi_refresh() == 0) { midi_close(); return; }
-    if (midi_open(g->midi_active, &g->e->q_midi) == 0) {
-        char m[200];
-        snprintf(m, sizeof m, "MIDI conectado: %s", midi_open_name());
-        set_status(g, m);
-    } else {
-        set_status(g, "Não foi possível abrir o dispositivo MIDI");
-    }
+    midi_close();
+    midi_out_close();
+    build_device_lists(g);
+    apply_midi(g);
+    apply_midi_out(g);
 }
 
 /* ------------------------------------------------------------------ */
@@ -303,15 +217,15 @@ static void build_preset_list(Gui *g)
     }
     qsort(g->user_presets, g->n_user, sizeof g->user_presets[0], cmp_str);
     g->preset_items[0] = 0;
-    for (int i = 0; i < factory_preset_count(); i++) {
-        if (i) strncat(g->preset_items, ";", sizeof g->preset_items - strlen(g->preset_items) - 1);
-        strncat(g->preset_items, factory_preset_name(i), sizeof g->preset_items - strlen(g->preset_items) - 1);
-    }
+    for (int i = 0; i < factory_preset_count(); i++) append_item(g->preset_items, sizeof g->preset_items, factory_preset_name(i));
     for (int i = 0; i < g->n_user; i++) {
-        strncat(g->preset_items, ";* ", sizeof g->preset_items - strlen(g->preset_items) - 1);
-        strncat(g->preset_items, g->user_presets[i], sizeof g->preset_items - strlen(g->preset_items) - 1);
+        char t[140];
+        snprintf(t, sizeof t, "★ %s", g->user_presets[i]);
+        append_item(g->preset_items, sizeof g->preset_items, t);
     }
 }
+
+static int preset_total(Gui *g) { return factory_preset_count() + g->n_user; }
 
 static void load_preset(Gui *g, int idx)
 {
@@ -327,20 +241,22 @@ static void load_preset(Gui *g, int idx)
         preset_load(path);
         snprintf(g->preset_name, sizeof g->preset_name, "%s", g->user_presets[idx - nf]);
     }
+    g->preset_active = idx;
     char m[160];
     snprintf(m, sizeof m, "Preset carregado: %s", g->preset_name);
     set_status(g, m);
 }
 
-static void save_preset(Gui *g)
+static void save_preset(Gui *g, const char *name)
 {
     char clean[64];
     int j = 0;
-    for (int i = 0; g->preset_name[i] && j < 60; i++) {
-        unsigned char c = (unsigned char)g->preset_name[i];
-        if (c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|' || c == ';') continue;
+    for (int i = 0; name[i] && j < 60; i++) {
+        unsigned char c = (unsigned char)name[i];
+        if (strchr("/\\:*?\"<>|;", c)) continue;
         clean[j++] = (char)c;
     }
+    while (j > 0 && clean[j - 1] == ' ') j--;
     clean[j] = 0;
     if (!j) { set_status(g, "Digite um nome para o preset"); return; }
     MakeDirectory(PRESET_DIR);
@@ -350,6 +266,7 @@ static void save_preset(Gui *g)
         build_preset_list(g);
         for (int i = 0; i < g->n_user; i++)
             if (!strcmp(g->user_presets[i], clean)) g->preset_active = factory_preset_count() + i;
+        snprintf(g->preset_name, sizeof g->preset_name, "%s", clean);
         char m[360];
         snprintf(m, sizeof m, "Preset salvo em %s", path);
         set_status(g, m);
@@ -395,7 +312,7 @@ static void toggle_recording(Gui *g)
 }
 
 /* ------------------------------------------------------------------ */
-/* Teclado do computador e piano                                       */
+/* Teclado do computador                                               */
 /* ------------------------------------------------------------------ */
 static const struct { int key, semi; } KEYMAP[] = {
     {KEY_Z, 0}, {KEY_S, 1}, {KEY_X, 2}, {KEY_D, 3}, {KEY_C, 4}, {KEY_V, 5}, {KEY_G, 6}, {KEY_B, 7},
@@ -407,21 +324,15 @@ static const struct { int key, semi; } KEYMAP[] = {
 };
 #define NKEYS (int)(sizeof KEYMAP / sizeof KEYMAP[0])
 
-static void looper_main_button(Gui *g);
-
 static void handle_keyboard(Gui *g)
 {
     Engine *e = g->e;
-    if (g->name_edit || g->ch_edit) return; /* digitando um nome: teclas não tocam */
-
+    if (ui_typing() || g->save_open || g->audio_open) return; /* digitando ou numa janela: as teclas não tocam */
     int base = 12 * (param_geti(P_KEYS_OCTAVE) + 1);
     for (int i = 0; i < NKEYS; i++) {
         if (IsKeyPressed(KEYMAP[i].key)) {
             int note = base + KEYMAP[i].semi;
-            if (note <= 127) {
-                g->key_note[i] = note;
-                engine_ui_event(e, EV_NOTE_ON, note, 100);
-            }
+            if (note <= 127) { g->key_note[i] = note; engine_ui_event(e, EV_NOTE_ON, note, 100); }
         }
         if (IsKeyReleased(KEYMAP[i].key) && g->key_note[i] >= 0) {
             engine_ui_event(e, EV_NOTE_OFF, g->key_note[i], 0);
@@ -432,30 +343,33 @@ static void handle_keyboard(Gui *g)
     if (IsKeyPressed(KEY_RIGHT)) param_set(P_KEYS_OCTAVE, param_get(P_KEYS_OCTAVE) + 1);
     if (IsKeyPressed(KEY_SPACE))  engine_ui_event(e, EV_CC, 64, 127);
     if (IsKeyReleased(KEY_SPACE)) engine_ui_event(e, EV_CC, 64, 0);
-    if (IsKeyPressed(KEY_ENTER))  looper_main_button(g);
+    if (IsKeyPressed(KEY_ENTER) && !g->save_open) looper_command(&e->looper, LCMD_REC);
 }
 
+/* ------------------------------------------------------------------ */
+/* Piano                                                               */
+/* ------------------------------------------------------------------ */
 #define PIANO_LOW  36 /* C2 */
 #define PIANO_HIGH 96 /* C7 */
 
 static bool is_black(int n) { int k = n % 12; return k == 1 || k == 3 || k == 6 || k == 8 || k == 10; }
 
-static Rectangle key_rect(Rectangle area, int note, float white_w)
+static Rectangle key_rect(Rectangle area, int note, float ww)
 {
     int whites = 0;
     for (int n = PIANO_LOW; n < note; n++) if (!is_black(n)) whites++;
-    if (!is_black(note)) return (Rectangle){area.x + whites * white_w, area.y, white_w, area.height};
-    float bw = white_w * 0.62f;
-    return (Rectangle){area.x + whites * white_w - bw / 2, area.y, bw, area.height * 0.6f};
+    if (!is_black(note)) return (Rectangle){area.x + whites * ww, area.y, ww - 2, area.height};
+    float bw = ww * 0.62f;
+    return (Rectangle){area.x + whites * ww - bw / 2 - 1, area.y, bw, area.height * 0.6f};
 }
 
-static int piano_hit(Rectangle area, Vector2 m, float white_w)
+static int piano_hit(Rectangle area, Vector2 m, float ww)
 {
     if (!CheckCollisionPointRec(m, area)) return -1;
     for (int n = PIANO_LOW; n <= PIANO_HIGH; n++)
-        if (is_black(n) && CheckCollisionPointRec(m, key_rect(area, n, white_w))) return n;
+        if (is_black(n) && CheckCollisionPointRec(m, key_rect(area, n, ww))) return n;
     for (int n = PIANO_LOW; n <= PIANO_HIGH; n++)
-        if (!is_black(n) && CheckCollisionPointRec(m, key_rect(area, n, white_w))) return n;
+        if (!is_black(n) && CheckCollisionPointRec(m, key_rect(area, n, ww))) return n;
     return -1;
 }
 
@@ -464,26 +378,24 @@ static void draw_piano(Gui *g, Rectangle area)
     Engine *e = g->e;
     int whites = 0;
     for (int n = PIANO_LOW; n <= PIANO_HIGH; n++) if (!is_black(n)) whites++;
-    float ww = area.width / whites;
+    float ww = (area.width + 2) / whites;
 
-    /* faixa que mostra onde está o teclado do computador */
+    /* faixa azul: onde está o teclado do computador */
     int base = 12 * (param_geti(P_KEYS_OCTAVE) + 1);
-    Rectangle a = key_rect(area, base < PIANO_LOW ? PIANO_LOW : base, ww);
-    int hi = base + 28 > PIANO_HIGH ? PIANO_HIGH : base + 28;
-    Rectangle b = key_rect(area, hi, ww);
-    if (base <= PIANO_HIGH) {
-        DrawRectangle((int)a.x, (int)area.y - 7, (int)(b.x + b.width - a.x), 4, Fade(C_ACCENT, 0.6f));
+    int lo = base < PIANO_LOW ? PIANO_LOW : base, hi = base + 28 > PIANO_HIGH ? PIANO_HIGH : base + 28;
+    if (lo <= PIANO_HIGH) {
+        Rectangle a = key_rect(area, lo, ww), b = key_rect(area, hi, ww);
+        ui_rect((Rectangle){a.x, area.y - 9, b.x + b.width - a.x, 4}, 2, Fade(C_CYAN, 0.8f));
     }
 
-    /* mouse: clica e arrasta (glissando) */
-    bool locked = GuiIsLocked();
-    Vector2 m = GetMousePosition();
-    if (!locked && IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
-        int n = IsMouseButtonPressed(MOUSE_BUTTON_LEFT) || g->mouse_note >= 0 ? piano_hit(area, m, ww) : -1;
+    /* mouse: clica e arrasta (glissando); mais embaixo na tecla = mais forte */
+    Vector2 m = ui_mouse();
+    bool can = ui_hover(area) || g->mouse_note >= 0;
+    if (can && IsMouseButtonDown(MOUSE_BUTTON_LEFT) && !ui_blocked()) {
+        int n = (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) || g->mouse_note >= 0) ? piano_hit(area, m, ww) : -1;
         if (n != g->mouse_note) {
             if (g->mouse_note >= 0) engine_ui_event(e, EV_NOTE_OFF, g->mouse_note, 0);
             if (n >= 0) {
-                /* clicar mais embaixo na tecla = mais forte */
                 Rectangle kr = key_rect(area, n, ww);
                 int vel = 50 + (int)(77 * (m.y - kr.y) / kr.height);
                 engine_ui_event(e, EV_NOTE_ON, n, vel > 127 ? 127 : vel);
@@ -497,40 +409,247 @@ static void draw_piano(Gui *g, Rectangle area)
 
     unsigned char lit[128] = {0};
     for (int i = 0; i < 128; i++) lit[i] = atomic_load(&e->notes_on[i]);
-    for (int i = 0; i < NKEYS; i++) if (g->key_note[i] >= 0) lit[g->key_note[i]] |= 2;
-    if (g->mouse_note >= 0) lit[g->mouse_note] |= 2;
+    for (int i = 0; i < NKEYS; i++) if (g->key_note[i] >= 0) lit[g->key_note[i]] = 1;
+    if (g->mouse_note >= 0) lit[g->mouse_note] = 1;
 
     for (int pass = 0; pass < 2; pass++) {
         for (int n = PIANO_LOW; n <= PIANO_HIGH; n++) {
             if (is_black(n) != (pass == 1)) continue;
             Rectangle r = key_rect(area, n, ww);
-            Color c = pass ? (Color){30, 30, 34, 255} : (Color){236, 236, 232, 255};
-            if (lit[n]) c = pass ? ColorBrightness(C_ACCENT, -0.2f) : C_ACCENT;
-            DrawRectangleRec((Rectangle){r.x + 1, r.y, r.width - 2, r.height - 1}, c);
-            if (!pass && n % 12 == 0) {
-                char nm[8];
-                note_name(n, nm, sizeof nm);
-                text(nm, r.x + 5, r.y + r.height - 22, lit[n] ? WHITE : (Color){120, 120, 120, 255});
+            if (!pass) {
+                Color c = lit[n] ? C_AMBER : (Color){233, 235, 238, 255};
+                DrawRectangleRec((Rectangle){r.x, r.y, r.width, r.height - 7}, c);
+                ui_rect((Rectangle){r.x, r.y + r.height - 14, r.width, 14}, 6, c);
+                if (n % 12 == 0) {
+                    char nm[8];
+                    note_name(n, nm, sizeof nm);
+                    ui_text_center(nm, (Rectangle){r.x, r.y + r.height - 24, r.width, 14}, 10.5f, UI_SEMIBOLD,
+                                   lit[n] ? (Color){42, 26, 2, 255} : (Color){107, 115, 128, 255});
+                }
+            } else {
+                Color c = lit[n] ? (Color){196, 127, 15, 255} : (Color){26, 29, 34, 255};
+                DrawRectangleRec((Rectangle){r.x, r.y + 2, r.width, r.height - 2}, BLACK);
+                DrawRectangleRec((Rectangle){r.x, r.y, r.width, r.height - 6}, c);
+                ui_rect((Rectangle){r.x, r.y + r.height - 14, r.width, 10}, 5, c);
             }
         }
     }
 }
 
 /* ------------------------------------------------------------------ */
-/* Painel de entrada                                                   */
+/* Desenhos de apoio (curvas e medidores)                              */
 /* ------------------------------------------------------------------ */
-static void draw_level_meter(Rectangle r, float db, float gate_db)
+static void well(Rectangle r) { ui_rect(r, 8, C_WELL); }
+
+static void draw_polyline(const Vector2 *p, int n, float thick, Color c)
 {
-    DrawRectangleRec(r, (Color){20, 20, 24, 255});
-    float t = (db + 70.0f) / 70.0f;
-    t = t < 0 ? 0 : (t > 1 ? 1 : t);
-    Color c = db > -6 ? RED : (db > gate_db ? (Color){80, 200, 120, 255} : (Color){90, 110, 130, 255});
-    DrawRectangle((int)r.x, (int)r.y, (int)(r.width * t), (int)r.height, c);
-    float gx = r.x + r.width * (gate_db + 70.0f) / 70.0f;
-    DrawRectangle((int)gx - 1, (int)r.y - 3, 3, (int)r.height + 6, C_ACCENT);
-    DrawRectangleLinesEx(r, 1, C_LINE);
+    for (int i = 1; i < n; i++) DrawLineEx(p[i - 1], p[i], thick, c);
 }
 
+/* Área sob a curva: dois triângulos por trecho (desenhados nos dois
+   sentidos, porque o raylib descarta os que estão "de costas") */
+static void fill_under(const Vector2 *p, int n, float bottom, Color c)
+{
+    for (int i = 1; i < n; i++) {
+        Vector2 a = p[i - 1], b = p[i], bb = {b.x, bottom}, ab = {a.x, bottom};
+        DrawTriangle(a, ab, bb, c); DrawTriangle(a, bb, ab, c);
+        DrawTriangle(a, bb, b, c);  DrawTriangle(a, b, bb, c);
+    }
+}
+
+static void draw_filter_curve(Rectangle r)
+{
+    well(r);
+    float fc = param_get(P_CUTOFF), k = 2.0f - 1.95f * param_get(P_RESONANCE);
+    Vector2 p[96];
+    for (int i = 0; i < 96; i++) {
+        float f = 20.0f * powf(1000.0f, i / 95.0f), x = f / fc;
+        float mag = 1.0f / sqrtf((1 - x * x) * (1 - x * x) + (k * x) * (k * x));
+        float db = 20.0f * log10f(mag);
+        p[i] = (Vector2){r.x + r.width * i / 95.0f, clampf(r.y + r.height * 0.36f - db * 1.3f, r.y + 4, r.y + r.height - 2)};
+    }
+    fill_under(p, 96, r.y + r.height, Fade(C_AMBER, 0.12f));
+    draw_polyline(p, 96, 2, C_AMBER);
+    float cx = r.x + r.width * logf(fc / 20.0f) / logf(1000.0f);
+    for (float y = r.y + 6; y < r.y + r.height - 6; y += 6) DrawLineEx((Vector2){cx, y}, (Vector2){cx, y + 3}, 1, Fade(C_AMBER, 0.5f));
+}
+
+static void draw_adsr(Rectangle r, int pa, int pd, int ps, int pr)
+{
+    well(r);
+    float a = param_get(pa), d = param_get(pd), s = param_get(ps), rel = param_get(pr), hold = 0.25f;
+    /* escala com raiz: tempos curtos e longos aparecem bem */
+    float wa = sqrtf(a), wd = sqrtf(d), wr = sqrtf(rel), wh = sqrtf(hold);
+    float k = (r.width - 12) / (wa + wd + wh + wr);
+    float top = r.y + 8, bot = r.y + r.height - 6, ys = bot - (bot - top) * s;
+    Vector2 p[5] = {{r.x + 6, bot}, {r.x + 6 + wa * k, top}, {r.x + 6 + (wa + wd) * k, ys},
+                    {r.x + 6 + (wa + wd + wh) * k, ys}, {r.x + 6 + (wa + wd + wh + wr) * k, bot}};
+    fill_under(p, 5, bot, Fade(C_AMBER, 0.12f));
+    draw_polyline(p, 5, 2, C_AMBER);
+}
+
+static void draw_lfo(Rectangle r)
+{
+    well(r);
+    DrawLineEx((Vector2){r.x, r.y + r.height / 2}, (Vector2){r.x + r.width, r.y + r.height / 2}, 1, (Color){30, 35, 43, 255});
+    float rate = param_get(P_LFO_RATE), ph = (float)GetTime() * rate;
+    float cycles = clampf(rate * 0.6f, 1.5f, 8.0f);
+    Vector2 p[120];
+    for (int i = 0; i < 120; i++) {
+        float t = i / 119.0f;
+        p[i] = (Vector2){r.x + 4 + (r.width - 8) * t, r.y + r.height / 2 - sinf((t * cycles - ph) * 2 * PI) * r.height * 0.32f};
+    }
+    draw_polyline(p, 120, 2, C_AMBER);
+}
+
+static void draw_scope(Gui *g, Rectangle r)
+{
+    ui_panel(r, 12, C_WELL, C_BORDER);
+    DrawLineEx((Vector2){r.x + 8, r.y + r.height / 2}, (Vector2){r.x + r.width - 8, r.y + r.height / 2}, 1, (Color){28, 33, 40, 255});
+    static float buf[SCOPE_SIZE];
+    unsigned end = atomic_load(&g->e->scope_pos);
+    for (int i = 0; i < SCOPE_SIZE; i++) buf[i] = atomic_load_explicit(&g->e->scope[(end + i) & (SCOPE_SIZE - 1)], memory_order_relaxed);
+    int start = 0;
+    for (int i = 1; i < SCOPE_SIZE / 2; i++) if (buf[i - 1] <= 0 && buf[i] > 0) { start = i; break; }
+    int n = SCOPE_SIZE / 2;
+    float gain = 0;
+    for (int i = 0; i < n; i++) gain = fmaxf(gain, fabsf(buf[start + i]));
+    gain = gain > 0.02f ? 0.42f / gain : 0.42f / 0.02f;
+    Vector2 prev = {0};
+    for (int i = 0; i < n; i += 2) {
+        Vector2 p = {r.x + 8 + (r.width - 16) * i / (n - 1), r.y + r.height / 2 - buf[start + i] * gain * r.height};
+        if (i) DrawLineEx(prev, p, 1.6f, C_AMBER);
+        prev = p;
+    }
+    ui_caption("OSCILOSCÓPIO", r.x + 12, r.y + 7, C_TEXT2);
+}
+
+/* ------------------------------------------------------------------ */
+/* Barra superior                                                      */
+/* ------------------------------------------------------------------ */
+static void draw_logo(float x, float y)
+{
+    ui_panel((Rectangle){x, y, 28, 28}, 8, (Color){30, 34, 41, 255}, (Color){46, 52, 64, 255});
+    Vector2 p[24];
+    for (int i = 0; i < 24; i++) {
+        float t = i / 23.0f;
+        p[i] = (Vector2){x + 6 + 16 * t, y + 14 - sinf(t * 2 * PI) * 6 * (1 - 0.3f * t)};
+    }
+    draw_polyline(p, 24, 2.2f, C_AMBER);
+}
+
+static const char *preset_category(int idx)
+{
+    static const char *cat[] = {"INIT", "LEAD", "PAD", "BAIXO", "ÓRGÃO", "PLUCK", "ARPEJO"};
+    if (idx < (int)(sizeof cat / sizeof cat[0])) return cat[idx];
+    return "MEU";
+}
+
+static void draw_top_bar(Gui *g)
+{
+    DrawRectangle(0, 0, UI_W, 56, C_BAR);
+    DrawRectangle(0, 56, UI_W, 1, (Color){31, 36, 44, 255});
+    draw_logo(16, 14);
+    ui_text("Sintetizador", 54, 18, 15, UI_BOLD, C_TEXT);
+
+    /* seletor de preset: ‹ [TAG Nome ▾] › */
+    Rectangle grp = {212, 10, 320, 36};
+    ui_panel(grp, 10, (Color){26, 30, 37, 255}, C_BORDER2);
+    int total = preset_total(g);
+    if (ui_button_icon((Rectangle){grp.x + 1, grp.y + 1, 34, 34}, "chev-left", "Preset anterior"))
+        load_preset(g, (g->preset_active - 1 + total) % total);
+    if (ui_button_icon((Rectangle){grp.x + grp.width - 35, grp.y + 1, 34, 34}, "chev-right", "Próximo preset"))
+        load_preset(g, (g->preset_active + 1) % total);
+    ui_tooltip((Rectangle){grp.x + 1, grp.y + 1, 34, 34}, "Preset anterior");
+    ui_tooltip((Rectangle){grp.x + grp.width - 35, grp.y + 1, 34, 34}, "Próximo preset");
+    Rectangle mid = {grp.x + 36, grp.y + 1, grp.width - 72, 34};
+    const char *cat = preset_category(g->preset_active);
+    float cw = ui_text_width(cat, 10, UI_BOLD) + 12;
+    if (ui_dropdown(mid, g->preset_items, &g->preset_active, DD_PRESET)) load_preset(g, g->preset_active);
+    /* desenha a etiqueta e o nome por cima da lista fechada */
+    ui_rect((Rectangle){mid.x + 2, mid.y + 2, mid.width - 30, mid.height - 4}, 8, ui_hover(mid) ? C_CTRL_HOV : C_CTRL);
+    Rectangle tag = {mid.x + 10, mid.y + 9, cw, 17};
+    ui_rect(tag, 5, C_AMBER_BG);
+    ui_text_center(cat, tag, 10, UI_BOLD, C_AMBER);
+    ui_text(g->preset_name, tag.x + cw + 8, mid.y + 9, 13, UI_SEMIBOLD, C_TEXT);
+
+    if (ui_button((Rectangle){542, 10, 92, 36}, "@save Salvar", UI_BTN_NORMAL)) {
+        g->save_open = !g->save_open;
+        g->save_name[0] = 0; /* vazio: Enter salva com o nome atual */
+        if (g->save_open) ui_focus(TB_SAVE);
+    }
+    ui_tooltip((Rectangle){542, 10, 92, 36}, "Salva o som atual como um preset seu (pasta presets/).");
+
+    /* lado direito */
+    float x = 1268;
+    /* volume geral + medidor */
+    float peak = atomic_load(&g->e->peak);
+    g->out_level = fmaxf(peak, g->out_level * 0.9f);
+    float db = 20 * log10f(g->out_level + 1e-6f);
+    ui_meter((Rectangle){x - 82, 22, 82, 12}, 16, clampf((db + 48) / 48, 0, 1), 0.62f, 0.9f);
+    ui_tooltip((Rectangle){x - 82, 18, 82, 20}, "Nível de saída. Se acender o vermelho, baixe o volume.");
+    x -= 82 + 12;
+    ui_knob_draw(x - 17, 28, 34, param_get_norm(P_MASTER), C_TEXT, false);
+    {
+        /* knob pequeno sem rótulo: interação própria */
+        Rectangle hit = {x - 36, 8, 38, 40};
+        static float drag_y, drag_v;
+        static bool dragging;
+        if (ui_learn()) ui_learn_zone(hit, P_MASTER);
+        else {
+            if (ui_pressed(hit)) { dragging = true; drag_y = ui_mouse().y; drag_v = param_get_norm(P_MASTER); }
+            if (dragging && IsMouseButtonDown(MOUSE_BUTTON_LEFT)) param_set_norm(P_MASTER, drag_v + (drag_y - ui_mouse().y) * 0.006f);
+            else dragging = false;
+            if (ui_hover(hit)) param_set_norm(P_MASTER, param_get_norm(P_MASTER) + GetMouseWheelMove() * 0.025f);
+        }
+        char t[128];
+        snprintf(t, sizeof t, "Volume geral: %.0f%%. Arraste para cima/baixo ou use a roda do mouse.", param_get(P_MASTER) * 100);
+        ui_tooltip(hit, t);
+    }
+    x -= 36 + 14;
+    DrawRectangle((int)x + 6, 14, 1, 28, (Color){31, 36, 44, 255});
+    x -= 6;
+
+    Rectangle pan = {x - 84, 10, 84, 36};
+    if (ui_button(pan, "Pânico", UI_BTN_NORMAL)) {
+        Event off = {EV_ALL_OFF, SRC_KEYS, 0, 0, 0};
+        evq_push(&g->e->q_ui, off);
+        looper_command(&g->e->looper, LCMD_STOP);
+        set_status(g, "Todas as notas foram silenciadas");
+    }
+    ui_tooltip(pan, "Silencia todas as notas presas e para o looper.");
+    x -= 84 + 8;
+
+    bool rec = recorder_active(&g->rec);
+    char rl[48];
+    if (rec) {
+        double s = GetTime() - g->rec_start;
+        snprintf(rl, sizeof rl, "Gravando %02d:%02d", (int)s / 60, (int)s % 60);
+    } else snprintf(rl, sizeof rl, "@rec Gravar");
+    Rectangle rb = {x - 138, 10, 138, 36};
+    if (ui_button(rb, rl, rec ? UI_BTN_DANGER : UI_BTN_NORMAL)) toggle_recording(g);
+    if (rec) ui_led(rb.x + 16, rb.y + 18, 5, (int)(GetTime() * 2) % 2 == 0, C_RED);
+    ui_tooltip(rb, rec ? "Clique para parar e salvar o WAV." : "Grava tudo o que sai (sem o metrônomo) em gravacoes/.");
+    x -= 138 + 8;
+
+    Rectangle lb = {x - 124, 10, 124, 36};
+    if (ui_button(lb, "@midi MIDI Learn", ui_learn() ? UI_BTN_AMBER : UI_BTN_NORMAL)) {
+        ui_set_learn(!ui_learn());
+        midi_last_cc(&g->learn_seen);
+        set_status(g, ui_learn() ? "MIDI learn: clique num controle e gire um knob do seu controlador (botão direito desfaz)"
+                                 : "MIDI learn desligado");
+    }
+    ui_tooltip(lb, "Liga um knob do seu controlador MIDI a qualquer controle da tela.");
+    x -= 124 + 8;
+
+    Rectangle ab = {x - 36, 10, 36, 36};
+    if (ui_button(ab, "@gear", g->audio_open ? UI_BTN_CYAN : UI_BTN_NORMAL)) g->audio_open = !g->audio_open;
+    ui_tooltip(ab, "Configurações de áudio: saída, buffer e latência.");
+}
+
+/* ------------------------------------------------------------------ */
+/* Painel de entrada                                                   */
+/* ------------------------------------------------------------------ */
 static void draw_tuner(Gui *g, Rectangle r)
 {
     Engine *e = g->e;
@@ -538,266 +657,491 @@ static void draw_tuner(Gui *g, Rectangle r)
     double now = GetTime();
     if (hz > 0) {
         float midi = hz_to_midi(hz);
-        g->tuner_note  = (int)lroundf(midi);
-        g->tuner_cents += ((midi - g->tuner_note) * 100.0f - g->tuner_cents) * 0.3f;
+        int n = (int)lroundf(midi);
+        if (n != g->tuner_note) g->tuner_cents = (midi - n) * 100.0f;
+        g->tuner_note  = n;
+        g->tuner_cents += ((midi - n) * 100.0f - g->tuner_cents) * 0.3f;
         g->tuner_hz    = hz;
         g->tuner_time  = now;
     }
-    group(r, "Afinador");
-    bool fresh = now - g->tuner_time < 0.6;
-    char nm[8] = "--";
-    if (g->tuner_time > 0 && fresh) note_name(g->tuner_note, nm, sizeof nm);
-    Color nc = !fresh ? C_DIM : (fabsf(g->tuner_cents) < 5 ? (Color){80, 220, 120, 255} : C_TEXT);
-    text_size(nm, r.x + 14, r.y + 22, 32, nc);
+    bool fresh = g->tuner_time > 0 && now - g->tuner_time < 0.6;
+    bool tuned = fresh && fabsf(g->tuner_cents) < 5;
+    ui_panel(r, 12, C_WELL, C_BORDER);
+    ui_caption("AFINADOR", r.x + 12, r.y + 12, C_TEXT2);
+    if (fresh) {
+        const char *chip = tuned ? "afinado" : (g->tuner_cents < 0 ? "baixo" : "alto");
+        float cw = ui_text_width(chip, 11, UI_SEMIBOLD) + 16;
+        Rectangle c = {r.x + r.width - cw - 10, r.y + 9, cw, 20};
+        ui_rect(c, 6, tuned ? (Color){18, 41, 31, 255} : (Color){42, 34, 19, 255});
+        ui_text_center(chip, c, 11, UI_SEMIBOLD, tuned ? C_GREEN : C_AMBER);
+    }
+    char nm[8] = "--", oct[12] = "";
+    if (fresh) {
+        static const char *names[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+        snprintf(nm, sizeof nm, "%s", names[((g->tuner_note % 12) + 12) % 12]);
+        snprintf(oct, sizeof oct, "%d", g->tuner_note / 12 - 1);
+    }
+    Color nc = !fresh ? C_TEXT2 : (tuned ? C_GREEN : C_TEXT);
+    ui_text(nm, r.x + 12, r.y + 34, 38, UI_BOLD, nc);
+    float nw = ui_text_width(nm, 38, UI_BOLD);
+    ui_text(oct, r.x + 14 + nw, r.y + 52, 17, UI_SEMIBOLD, nc);
     if (fresh) {
         char t[48];
-        snprintf(t, sizeof t, "%.1f Hz %+.0f cents", g->tuner_hz, g->tuner_cents);
-        text(t, r.x + 100, r.y + 18, C_TEXT);
+        snprintf(t, sizeof t, "%.1f Hz · %+.0f cents", g->tuner_hz, g->tuner_cents);
+        ui_text(t, r.x + 72, r.y + 52, 12.5f, UI_REGULAR, C_TEXT2);
     }
-    Rectangle bar = {r.x + 100, r.y + 44, r.width - 112, 16};
-    DrawRectangleRec(bar, (Color){20, 20, 24, 255});
-    DrawRectangle((int)(bar.x + bar.width / 2 - bar.width * 0.05f), (int)bar.y, (int)(bar.width * 0.1f), (int)bar.height, Fade(GREEN, 0.25f));
-    DrawLine((int)(bar.x + bar.width / 2), (int)bar.y - 3, (int)(bar.x + bar.width / 2), (int)(bar.y + bar.height + 3), C_DIM);
+    /* régua de cents com ponteiro */
+    Rectangle bar = {r.x + 14, r.y + r.height - 30, r.width - 28, 20};
+    for (int i = 0; i <= 20; i++) {
+        float x = bar.x + bar.width * i / 20.0f;
+        float h = i == 10 ? 10 : (i % 5 == 0 ? 8 : 5);
+        DrawRectangleRec((Rectangle){x - 1, bar.y + 12 - h, 2, h}, (i >= 9 && i <= 11) ? C_GREEN : (Color){58, 65, 77, 255});
+    }
     if (fresh) {
-        float c = g->tuner_cents < -50 ? -50 : (g->tuner_cents > 50 ? 50 : g->tuner_cents);
+        float c = clampf(g->tuner_cents, -50, 50);
         float x = bar.x + bar.width * (0.5f + c / 100.0f);
-        DrawRectangle((int)x - 2, (int)bar.y - 2, 4, (int)bar.height + 4, nc);
+        Color pc = tuned ? C_GREEN : C_AMBER;
+        DrawRectangleRec((Rectangle){x - 6, bar.y - 4, 12, 22}, Fade(pc, 0.15f));
+        ui_rect((Rectangle){x - 2, bar.y - 4, 4, 22}, 2, pc);
     }
-    text("-50", bar.x, bar.y + 22, C_DIM);
-    text("0", bar.x + bar.width / 2 - 4, bar.y + 22, C_DIM);
-    text("+50", bar.x + bar.width - 28, bar.y + 22, C_DIM);
+}
+
+static void input_guitar(Gui *g, Rectangle p)
+{
+    Engine *e = g->e;
+    float x = p.x + 14, w = p.width - 28, y = p.y + 92;
+    ui_text("Interface de áudio", x, y, 11, UI_REGULAR, C_TEXT2);
+    ui_text("Canal", x + w - 64, y, 11, UI_REGULAR, C_TEXT2);
+    if (ui_dropdown((Rectangle){x, y + 17, w - 72, 34}, g->in_items, &g->in_active, DD_IN)) apply_audio(g);
+    if (ui_dropdown((Rectangle){x + w - 64, y + 17, 64, 34}, g->ch_items, &g->in_ch, DD_CH)) atomic_store(&e->cap_channel, g->in_ch);
+    ui_tooltip((Rectangle){x + w - 64, y + 17, 64, 34}, "Em qual entrada da interface a guitarra está ligada.");
+
+    y += 64;
+    float db = atomic_load(&e->guitar.st_db), gate = param_get(P_GTR_GATE);
+    char t[32];
+    ui_text("Nível", x, y, 11, UI_REGULAR, C_TEXT2);
+    snprintf(t, sizeof t, db < -90 ? "--" : "%.0f dB", db);
+    ui_text_right(t, x + w, y, 11.5f, UI_SEMIBOLD, C_TEXT);
+    Rectangle m = {x, y + 18, w, 12};
+    ui_meter(m, 30, clampf((db + 70) / 70, 0, 1), 0.76f, 0.9f);
+    float gx = m.x + m.width * clampf((gate + 70) / 70, 0, 1);
+    ui_rect((Rectangle){gx - 1, m.y - 4, 3, 20}, 1, C_AMBER);
+    ui_text("−70", x, y + 34, 10, UI_REGULAR, C_TEXT2);
+    ui_text_center("gate", (Rectangle){gx - 30, y + 34, 60, 12}, 10, UI_SEMIBOLD, C_AMBER);
+    ui_text_right("0 dB", x + w, y + 34, 10, UI_REGULAR, C_TEXT2);
+    ui_tooltip((Rectangle){x, y, w, 46}, "Nível da guitarra. O traço laranja é o gate: notas só começam acima dele.");
+
+    y += 84;
+    ui_knob(x + w * 0.17f, y, 44, P_GTR_GATE, C_CYAN, "Gate");
+    ui_knob(x + w * 0.5f, y, 44, P_GTR_GAIN, C_CYAN, "Ganho");
+    ui_knob_bipolar(x + w * 0.83f, y, 44, P_GTR_BLEND, C_CYAN, "Mistura");
+    ui_tooltip((Rectangle){x + w * 0.83f - 30, y - 26, 60, 90}, "Mistura o som limpo da guitarra com o synth: à esquerda só synth, à direita só guitarra.");
+
+    y += 66;
+    ui_text("Oitava", x, y + 8, 11, UI_REGULAR, C_TEXT2);
+    Rectangle st = {x + 46, y, 86, 30};
+    ui_panel(st, 9, C_CTRL, C_BORDER2);
+    if (ui_button_icon((Rectangle){st.x + 2, st.y + 2, 26, 26}, "minus", "Oitava abaixo")) param_set(P_GTR_OCTAVE, param_get(P_GTR_OCTAVE) - 1);
+    if (ui_button_icon((Rectangle){st.x + st.width - 28, st.y + 2, 26, 26}, "plus", "Oitava acima")) param_set(P_GTR_OCTAVE, param_get(P_GTR_OCTAVE) + 1);
+    snprintf(t, sizeof t, "%+d", param_geti(P_GTR_OCTAVE));
+    ui_text_center(param_geti(P_GTR_OCTAVE) ? t : "0", st, 12.5f, UI_SEMIBOLD, C_TEXT);
+    ui_tooltip(st, "Toca o synth uma ou duas oitavas acima ou abaixo da guitarra.");
+    ui_text_right("Seguir bends", x + w - 52, y + 8, 12, UI_REGULAR, C_TEXT);
+    ui_param_switch((Rectangle){x + w - 44, y + 3, 44, 24}, P_GTR_BENDS, C_CYAN);
+    ui_tooltip((Rectangle){x + w - 140, y, 140, 30}, "O synth acompanha bends e vibrato da corda.");
+
+    draw_tuner(g, (Rectangle){x, p.y + p.height - 120, w, 106});
+}
+
+static void input_keys(Gui *g, Rectangle p)
+{
+    (void)g;
+    float x = p.x + 14, y = p.y + 96;
+    ui_text("Toque pelo teclado do computador:", x, y, 12.5f, UI_SEMIBOLD, C_TEXT);
+    y += 26;
+    static const char *whites[2] = {"QWERTYUIOP", "ZXCVBNM,./"};
+    static const char *blacks[2] = {"23 567 90", "SD GHJ L;"};
+    for (int rr = 0; rr < 2; rr++) {
+        float ky = y + rr * 64;
+        for (int i = 0; blacks[rr][i]; i++) {
+            if (blacks[rr][i] == ' ') continue;
+            Rectangle k = {x + 4 + i * 26.0f + 13, ky, 23, 24};
+            ui_panel(k, 5, (Color){26, 29, 34, 255}, C_BORDER2);
+            char c[2] = {blacks[rr][i], 0};
+            ui_text_center(c, k, 11, UI_SEMIBOLD, C_TEXT);
+        }
+        for (int i = 0; whites[rr][i]; i++) {
+            Rectangle k = {x + 4 + i * 26.0f, ky + 28, 23, 26};
+            ui_rect(k, 5, (Color){233, 235, 238, 255});
+            char c[2] = {whites[rr][i], 0};
+            ui_text_center(c, k, 11, UI_SEMIBOLD, (Color){30, 30, 30, 255});
+        }
+    }
+    y += 140;
+    static const char *tips[][2] = {{"← →", "muda a oitava"}, {"Espaço", "pedal de sustain"}, {"Enter", "botão do looper"}};
+    for (int i = 0; i < 3; i++) {
+        float tw = ui_text_width(tips[i][0], 11, UI_SEMIBOLD) + 14;
+        Rectangle k = {x, y + i * 28.0f, tw, 21};
+        ui_panel(k, 5, C_CTRL, C_BORDER2);
+        ui_text_center(tips[i][0], k, 11, UI_SEMIBOLD, C_TEXT);
+        ui_text(tips[i][1], x + tw + 10, y + i * 28.0f + 3, 12, UI_REGULAR, C_TEXT2);
+    }
+    y += 96;
+    ui_text("Oitava do teclado", x, y + 8, 12, UI_REGULAR, C_TEXT2);
+    Rectangle st = {x + p.width - 28 - 98, y, 98, 30};
+    ui_panel(st, 9, C_CTRL, C_BORDER2);
+    if (ui_button_icon((Rectangle){st.x + 2, st.y + 2, 26, 26}, "minus", "Oitava abaixo")) param_set(P_KEYS_OCTAVE, param_get(P_KEYS_OCTAVE) - 1);
+    if (ui_button_icon((Rectangle){st.x + st.width - 28, st.y + 2, 26, 26}, "plus", "Oitava acima")) param_set(P_KEYS_OCTAVE, param_get(P_KEYS_OCTAVE) + 1);
+    char t[8];
+    snprintf(t, sizeof t, "C%d", param_geti(P_KEYS_OCTAVE));
+    ui_text_center(t, st, 12.5f, UI_SEMIBOLD, C_TEXT);
+    y += 44;
+    ui_text("Ou clique no piano lá embaixo:", x, y, 12, UI_REGULAR, C_TEXT2);
+    ui_text("mais embaixo na tecla = mais forte.", x, y + 18, 12, UI_REGULAR, C_TEXT2);
+}
+
+static void input_midi(Gui *g, Rectangle p)
+{
+    float x = p.x + 14, w = p.width - 28, y = p.y + 92;
+    ui_text("Dispositivo MIDI", x, y, 11, UI_REGULAR, C_TEXT2);
+    if (ui_dropdown((Rectangle){x, y + 17, w - 44, 34}, g->midi_items, &g->midi_active, DD_MIDI)) apply_midi(g);
+    if (ui_button((Rectangle){x + w - 38, y + 17, 38, 34}, "@refresh", UI_BTN_NORMAL)) refresh_all_devices(g);
+    ui_tooltip((Rectangle){x + w - 38, y + 17, 38, 34}, "Procura de novo os dispositivos MIDI (ligou um agora?).");
+    y += 66;
+    bool open = midi_is_open();
+    ui_led(x + 5, y + 8, 4, open, C_GREEN);
+    ui_text(!midi_available() ? "Compilado sem MIDI" : (open ? "Conectado" : "Nenhum dispositivo conectado"), x + 16, y, 12.5f, UI_SEMIBOLD, open ? C_GREEN : C_TEXT2);
+    y += 34;
+    static const char *lines[][2] = {
+        {"Pitch bend", "±2 semitons"}, {"Pedal (CC64)", "sustain"}, {"Roda (CC1)", "vibrato"},
+        {"CC74", "corte do filtro"}, {"CC71", "ressonância"}, {"CC7", "volume geral"},
+    };
+    for (int i = 0; i < 6; i++) {
+        ui_text(lines[i][0], x, y + i * 24.0f, 12, UI_SEMIBOLD, C_TEXT);
+        ui_text(lines[i][1], x + 112, y + i * 24.0f, 12, UI_REGULAR, C_TEXT2);
+    }
+    y += 6 * 24 + 18;
+    ui_panel((Rectangle){x, y, w, 66}, 10, C_WELL, C_BORDER);
+    ui_text("Quer usar outros knobs?", x + 12, y + 12, 12, UI_SEMIBOLD, C_TEXT);
+    ui_text("Ligue o MIDI Learn (barra de cima),", x + 12, y + 30, 12, UI_REGULAR, C_TEXT2);
+    ui_text("clique num controle e gire o knob.", x + 12, y + 46, 12, UI_REGULAR, C_TEXT2);
 }
 
 static void draw_input_panel(Gui *g)
 {
-    Engine *e = g->e;
-    Rectangle p = {8, 50, 330, 470};
-    GuiPanel(p, "ENTRADA");
-    float x = p.x + 10, w = p.width - 20;
-
+    Rectangle p = {12, 68, 300, 496};
+    ui_panel(p, 16, C_PANEL, C_BORDER);
+    ui_caption("ENTRADA", p.x + 14, p.y + 16, C_TEXT2);
     int mode = param_geti(P_INPUT_MODE);
-    GuiToggleGroup((Rectangle){x, 88, (w - 8) / 3, 30}, "Teclado;MIDI;Guitarra", &mode);
-    if (mode != param_geti(P_INPUT_MODE)) param_set(P_INPUT_MODE, (float)mode);
-
-    GuiLabel((Rectangle){x, 126, w, 20}, "Saída de áudio");
-    defer_dropdown(g, (Rectangle){x, 146, w, 26}, g->out_items, &g->out_active, &g->out_edit, DD_OUT);
-
-    if (mode == 0) {
-        float y = 186;
-        text("Toque pelo teclado do computador:", x, y, C_TEXT);
-        y += 26;
-        /* desenha as duas fileiras como teclas de piano: pretas entre as brancas */
-        static const char *whites[2] = {"QWERTYUIOP", "ZXCVBNM,./"};
-        static const char *blacks[2] = {"23 567 90", "SD GHJ L;"};
-        for (int rr = 0; rr < 2; rr++) {
-            float ky = y + rr * 58;
-            for (int i = 0; blacks[rr][i]; i++) {
-                if (blacks[rr][i] == ' ') continue;
-                Rectangle k = {x + 8 + i * 30.0f + 15, ky, 26, 22};
-                DrawRectangleRec(k, (Color){30, 30, 34, 255});
-                DrawRectangleLinesEx(k, 1, C_LINE);
-                char c[2] = {blacks[rr][i], 0};
-                text(c, k.x + 9, k.y + 3, C_TEXT);
-            }
-            for (int i = 0; whites[rr][i]; i++) {
-                Rectangle k = {x + 8 + i * 30.0f, ky + 26, 26, 22};
-                DrawRectangleRec(k, (Color){232, 232, 228, 255});
-                char c[2] = {whites[rr][i], 0};
-                text(c, k.x + 9, k.y + 3, (Color){30, 30, 30, 255});
-            }
-        }
-        y += 2 * 58 + 10;
-        text("Setas < >   oitava", x, y, C_DIM); y += 20;
-        text("Espaço      pedal de sustain", x, y, C_DIM); y += 20;
-        text("Enter       botão do looper", x, y, C_DIM); y += 26;
-        text("Ou clique no piano lá embaixo:", x, y, C_DIM); y += 20;
-        text("mais embaixo na tecla = mais forte", x, y, C_DIM); y += 20;
-        y += 8;
-        pcontrol_ex(g, (Rectangle){x, y, w, 26}, P_KEYS_OCTAVE, 90, 50);
-    } else if (mode == 1) {
-        GuiLabel((Rectangle){x, 182, w, 20}, "Dispositivo MIDI");
-        defer_dropdown(g, (Rectangle){x, 202, w - 92, 26}, g->midi_items, &g->midi_active, &g->midi_edit, DD_MIDI);
-        if (GuiButton((Rectangle){x + w - 86, 202, 86, 26}, "#211#Atualizar")) {
-            midi_close();
-            midi_out_close();
-            build_device_lists(g);
-            apply_midi(g);
-            apply_midi_out(g);
-        }
-        const char *st = !midi_available() ? "Compilado sem MIDI (SYNTH_MIDI=OFF)"
-                       : midi_is_open() ? "Conectado" : "Nenhum dispositivo conectado";
-        text(st, x, 240, midi_is_open() ? (Color){80, 220, 120, 255} : C_DIM);
-        float y = 276;
-        static const char *lines[] = {
-            "Pitch bend: +/- 2 semitons",
-            "Pedal (CC64): sustain",
-            "Roda de mod. (CC1): vibrato",
-            "CC74: corte  CC71: ressonância",
-            "CC7: volume geral",
-            "",
-            "Use \"MIDI Learn\" (barra de cima)",
-            "para ligar qualquer knob ou",
-            "fader do seu controlador a",
-            "qualquer controle da tela.",
-        };
-        for (unsigned i = 0; i < sizeof lines / sizeof lines[0]; i++, y += 19) text(lines[i], x, y, C_DIM);
-    } else {
-        GuiLabel((Rectangle){x, 182, w, 20}, "Entrada (guitarra / microfone)");
-        defer_dropdown(g, (Rectangle){x, 202, w, 26}, g->in_items, &g->in_active, &g->in_edit, DD_IN);
-
-        int chans = engine_capture_channels(e);
-        GuiLabel((Rectangle){x, 238, 60, 24}, "Canal");
-        int ch = g->in_ch + 1;
-        if (GuiSpinner((Rectangle){x + 56, 238, 96, 24}, NULL, &ch, 1, chans > 0 ? chans : 1, g->ch_edit)) g->ch_edit = !g->ch_edit;
-        if (ch - 1 != g->in_ch) { g->in_ch = ch - 1; atomic_store(&e->cap_channel, g->in_ch); }
-        pcontrol_ex(g, (Rectangle){x + 170, 238, w - 170, 24}, P_GTR_BENDS, 0, 0);
-
-        pcontrol_ex(g, (Rectangle){x, 270, w, 22}, P_GTR_GATE, 74, 64);
-        pcontrol_ex(g, (Rectangle){x, 298, w, 22}, P_GTR_GAIN, 74, 64);
-        GuiLabel((Rectangle){x, 324, 74, 18}, "Nível");
-        draw_level_meter((Rectangle){x + 74, 328, w - 74 - 64, 12}, atomic_load(&e->guitar.st_db), param_get(P_GTR_GATE));
-        char dbt[16];
-        float db = atomic_load(&e->guitar.st_db);
-        snprintf(dbt, sizeof dbt, db < -90 ? "--" : "%.0f dB", db);
-        text(dbt, x + w - 56, 324, C_DIM);
-        pcontrol_ex(g, (Rectangle){x, 352, w, 22}, P_GTR_BLEND, 74, 64);
-        pcontrol_ex(g, (Rectangle){x, 380, w, 22}, P_GTR_OCTAVE, 74, 64);
-        draw_tuner(g, (Rectangle){x, 414, w, 96});
-    }
+    bool ok = g->e->dev_ok && (mode != 1 || midi_is_open());
+    ui_led(p.x + p.width - 84, p.y + 21, 3.5f, ok, C_GREEN);
+    ui_text(ok ? "conectada" : "sem sinal", p.x + p.width - 74, p.y + 14, 11, UI_REGULAR, C_TEXT2);
+    if (ui_segmented((Rectangle){p.x + 14, p.y + 40, p.width - 28, 38}, "Teclado;MIDI;Guitarra", &mode, C_CYAN, C_CYAN_BG, C_CYAN_HI))
+        param_set(P_INPUT_MODE, (float)mode);
+    if (mode == 0) input_keys(g, p);
+    else if (mode == 1) input_midi(g, p);
+    else input_guitar(g, p);
 }
 
 /* ------------------------------------------------------------------ */
 /* Abas                                                                */
 /* ------------------------------------------------------------------ */
+static void wave_row(float x, float y, const char *name, int param)
+{
+    static const char *icons[4] = {"sine", "saw", "square", "tri"};
+    static const char *names[4] = {"Seno", "Serra", "Quadrada", "Triângulo"};
+    ui_text(name, x, y + 9, 11, UI_SEMIBOLD, C_TEXT2);
+    int sel = param_geti(param);
+    for (int i = 0; i < 4; i++) {
+        Rectangle b = {x + 46 + i * 50.0f, y, 46, 32};
+        bool on = i == sel, hov = ui_hover(b);
+        ui_rect(b, 8, on ? C_AMBER_BG : (hov ? C_CTRL_HOV : C_CTRL));
+        ui_rect_lines(b, 8, 1, on ? C_AMBER_BD : C_BORDER2);
+        ui_icon(icons[i], b.x + 13, b.y + 9, 20, on ? C_AMBER : (Color){140, 149, 164, 255});
+        ui_tooltip(b, names[i]);
+        if (ui_learn()) ui_learn_zone(b, param);
+        else if (ui_clicked(b)) param_set(param, (float)i);
+    }
+}
+
 static void tab_sound(Gui *g)
 {
-    float x1 = 356, x2 = 818, w = 446;
-    group((Rectangle){x1, 96, w, 138}, "Osciladores");
-    float y = 110;
-    int wv = param_geti(P_OSC1_WAVE);
-    GuiLabel((Rectangle){x1 + 10, y, 110, 26}, "Onda OSC1");
-    GuiToggleGroup((Rectangle){x1 + 128, y, 74, 26}, "Seno;Serra;Quadrada;Triângulo", &wv);
-    if (wv != param_geti(P_OSC1_WAVE)) param_set(P_OSC1_WAVE, (float)wv);
-    y += 30;
-    wv = param_geti(P_OSC2_WAVE);
-    GuiLabel((Rectangle){x1 + 10, y, 110, 26}, "Onda OSC2");
-    GuiToggleGroup((Rectangle){x1 + 128, y, 74, 26}, "Seno;Serra;Quadrada;Triângulo", &wv);
-    if (wv != param_geti(P_OSC2_WAVE)) param_set(P_OSC2_WAVE, (float)wv);
-    pcontrol(g, (Rectangle){x1 + 10, 172, w - 20, 22}, P_OSC_MIX);
-    pcontrol(g, (Rectangle){x1 + 10, 202, w - 20, 22}, P_DETUNE);
+    Rectangle area = {324, 118, 944, 446};
+    float cw = (area.width - 20) / 3, ch = (area.height - 10) / 2;
+    Rectangle c[6];
+    for (int i = 0; i < 6; i++) c[i] = (Rectangle){area.x + (i % 3) * (cw + 10), area.y + (i / 3) * (ch + 10), cw, ch};
 
-    group((Rectangle){x2, 96, w, 138}, "Filtro passa-baixa");
-    pcontrol(g, (Rectangle){x2 + 10, 112, w - 20, 22}, P_CUTOFF);
-    pcontrol(g, (Rectangle){x2 + 10, 142, w - 20, 22}, P_RESONANCE);
-    pcontrol(g, (Rectangle){x2 + 10, 172, w - 20, 22}, P_GLIDE);
-    pcontrol(g, (Rectangle){x2 + 10, 202, w - 20, 22}, P_SYNTH_LEVEL);
+    ui_card(c[0], "OSCILADORES", C_AMBER);
+    wave_row(c[0].x + 14, c[0].y + 38, "OSC 1", P_OSC1_WAVE);
+    wave_row(c[0].x + 14, c[0].y + 76, "OSC 2", P_OSC2_WAVE);
+    ui_knob(c[0].x + cw * 0.3f, c[0].y + 148, 46, P_OSC_MIX, C_AMBER, "Mistura");
+    ui_knob_bipolar(c[0].x + cw * 0.7f, c[0].y + 148, 46, P_DETUNE, C_AMBER, "Desafinar");
+    ui_tooltip((Rectangle){c[0].x + cw * 0.3f - 30, c[0].y + 122, 60, 76}, "Quanto do OSC 2 entra no som (0% = só OSC 1).");
+    ui_tooltip((Rectangle){c[0].x + cw * 0.7f - 30, c[0].y + 122, 60, 76}, "Desafina o OSC 2 em semitons: um pouco engrossa o som; +12 = uma oitava acima.");
 
-    group((Rectangle){x1, 248, w, 138}, "Envelope de volume");
-    group((Rectangle){x2, 248, w, 138}, "Envelope do filtro (fonte \"Env. filtro\")");
+    ui_card(c[1], "FILTRO", C_AMBER);
+    ui_text_right("passa-baixa 12 dB", c[1].x + cw - 14, c[1].y + 12, 11, UI_REGULAR, C_TEXT2);
+    draw_filter_curve((Rectangle){c[1].x + 14, c[1].y + 36, cw - 28, 74});
+    ui_knob(c[1].x + cw * 0.3f, c[1].y + 152, 54, P_CUTOFF, C_AMBER, "Corte");
+    ui_knob(c[1].x + cw * 0.7f, c[1].y + 152, 46, P_RESONANCE, C_AMBER, "Ressonância");
+    ui_tooltip((Rectangle){c[1].x + cw * 0.3f - 34, c[1].y + 120, 68, 80}, "Frequência de corte: mais alto = som mais brilhante.");
+    ui_tooltip((Rectangle){c[1].x + cw * 0.7f - 30, c[1].y + 124, 60, 76}, "Realça as frequências perto do corte (som mais \"ácido\").");
+
+    ui_card(c[2], "LFO", C_AMBER);
+    char t[32];
+    param_format(P_LFO_RATE, t, sizeof t);
+    ui_led(c[2].x + cw - 64, c[2].y + 19, 3.5f, sinf((float)GetTime() * param_get(P_LFO_RATE) * 2 * PI) > 0, C_AMBER);
+    ui_text_right(t, c[2].x + cw - 14, c[2].y + 12, 11, UI_REGULAR, C_TEXT2);
+    draw_lfo((Rectangle){c[2].x + 14, c[2].y + 36, cw - 28, 74});
+    ui_knob(c[2].x + cw * 0.3f, c[2].y + 152, 46, P_LFO_RATE, C_AMBER, "Velocidade");
+    ui_knob(c[2].x + cw * 0.7f, c[2].y + 152, 46, P_MODWHEEL, C_AMBER, "Roda mod.");
+    ui_tooltip((Rectangle){c[2].x + cw * 0.7f - 30, c[2].y + 124, 60, 76}, "Quantidade de vibrato (igual à roda de modulação de um teclado MIDI).");
+
     const int amp[4] = {P_ATTACK, P_DECAY, P_SUSTAIN, P_RELEASE};
     const int flt[4] = {P_FATTACK, P_FDECAY, P_FSUSTAIN, P_FRELEASE};
-    for (int i = 0; i < 4; i++) {
-        pcontrol(g, (Rectangle){x1 + 10, 264 + i * 30.0f, w - 20, 22}, amp[i]);
-        pcontrol(g, (Rectangle){x2 + 10, 264 + i * 30.0f, w - 20, 22}, flt[i]);
+    const char *lab[4] = {"Ataque", "Decai.", "Sust.", "Release"};
+    for (int k = 0; k < 2; k++) {
+        Rectangle r = c[3 + k];
+        ui_card(r, k ? "ENVELOPE DO FILTRO" : "ENVELOPE DE VOLUME", C_AMBER);
+        const int *ids = k ? flt : amp;
+        draw_adsr((Rectangle){r.x + 14, r.y + 36, cw - 28, 60}, ids[0], ids[1], ids[2], ids[3]);
+        for (int i = 0; i < 4; i++) ui_knob(r.x + 14 + (cw - 28) * (i + 0.5f) / 4, r.y + 136, 38, ids[i], C_AMBER, lab[i]);
+    }
+    ui_tooltip((Rectangle){c[3].x, c[3].y, cw, 30}, "Como o volume de cada nota nasce, se mantém e morre.");
+    ui_tooltip((Rectangle){c[4].x, c[4].y, cw, 30}, "Como o filtro abre e fecha em cada nota (ligado ao corte na aba Modulação).");
+
+    ui_card(c[5], "SAÍDA", C_AMBER);
+    ui_knob(c[5].x + cw * 0.3f, c[5].y + 72, 46, P_GLIDE, C_AMBER, "Glide");
+    ui_knob(c[5].x + cw * 0.7f, c[5].y + 72, 46, P_SYNTH_LEVEL, C_AMBER, "Nível");
+    ui_tooltip((Rectangle){c[5].x + cw * 0.3f - 30, c[5].y + 44, 60, 76}, "Tempo que a nota da guitarra leva para deslizar até a próxima.");
+    Rectangle vb = {c[5].x + 14, c[5].y + ch - 50, cw - 28, 36};
+    ui_panel(vb, 10, C_WELL, C_BORDER);
+    ui_text("Vozes", vb.x + 12, vb.y + 10, 11, UI_REGULAR, C_TEXT2);
+    int nv = synth_active_voices(&g->e->synth);
+    for (int i = 0; i < MAX_VOICES; i++) ui_led(vb.x + 80 + i * 16.0f, vb.y + 18, 5, i < nv, C_AMBER);
+    snprintf(t, sizeof t, "%d / %d", nv, MAX_VOICES);
+    ui_text_right(t, vb.x + vb.width - 12, vb.y + 10, 12, UI_SEMIBOLD, C_TEXT);
+}
+
+/* ---------- efeitos: pedaleira ---------- */
+static const Color FX_COLOR[FX_COUNT] = {
+    {251, 146, 60, 255}, {45, 212, 191, 255}, {167, 139, 250, 255}, {56, 189, 248, 255}, {129, 140, 248, 255}};
+static const char *FX_DESC[FX_COUNT] = {"saturação valvulada", "duas vozes, estéreo", "6 estágios", "no tempo do BPM", "sala (Freeverb)"};
+static const char *FX_TIP[FX_COUNT] = {
+    "Distorção: satura o som como um amplificador valvulado. Drive = quanto, Tom = brilho.",
+    "Chorus: duplica o som com pequenas variações, deixando-o largo e \"molhado\".",
+    "Phaser: varre filtros pelo som, criando aquele efeito de \"jato\".",
+    "Delay: repete o som. Com uma divisão escolhida, as repetições seguem o BPM.",
+    "Reverb: simula o som de uma sala. Tamanho = sala maior, Abafar = paredes macias."};
+
+static void pedal(Gui *g, Rectangle r, int slot, int t, bool ghost)
+{
+    bool on = param_geti(fx_param_on(t));
+    Color col = FX_COLOR[t];
+    if (!ghost) ui_shadow(r, 18);
+    ui_panel(r, 18, on ? (Color){23, 27, 33, 255} : (Color){19, 22, 27, 255}, ghost ? col : (on ? (Color){44, 51, 62, 255} : (Color){32, 37, 45, 255}));
+    Rectangle handle = {r.x + 12, r.y + 12, 30, 30};
+    bool hh = ui_hover(handle);
+    ui_rect(handle, 8, hh ? C_CTRL_HOV : C_CTRL);
+    ui_icon("drag", handle.x + 8, handle.y + 8, 14, (Color){140, 149, 164, 255});
+    if (!ghost && g->drag_fx < 0) ui_tooltip(handle, "Arraste para mudar a ordem na cadeia.");
+    if (!ghost && ui_pressed(handle)) { g->drag_fx = slot; g->drag_off = ui_mouse().x - r.x; }
+    char num[16];
+    snprintf(num, sizeof num, "%02d", slot + 1);
+    ui_text_center(num, (Rectangle){r.x, r.y + 18, r.width, 16}, 11, UI_BOLD, C_TEXT2);
+    ui_led(r.x + r.width - 24, r.y + 27, 5.5f, on, col);
+
+    ui_text(fx_name(t), r.x + 14, r.y + 54, 19, UI_BOLD, on ? C_TEXT : C_TEXT2);
+    ui_text(FX_DESC[t], r.x + 14, r.y + 80, 11.5f, UI_REGULAR, C_TEXT2);
+    if (!ghost && g->drag_fx < 0) ui_tooltip((Rectangle){r.x, r.y + 50, r.width, 46}, FX_TIP[t]);
+
+    static const int K[FX_COUNT][4] = {
+        {P_DIST_DRIVE, P_DIST_TONE, P_DIST_MIX, -1},
+        {P_CHO_RATE, P_CHO_DEPTH, P_CHO_MIX, -1},
+        {P_PHA_RATE, P_PHA_DEPTH, P_PHA_FB, P_PHA_MIX},
+        {P_DLY_FB, P_DLY_MIX, P_DLY_TIME, -1},
+        {P_REV_SIZE, P_REV_DAMP, P_REV_MIX, -1}};
+    static const char *KL[FX_COUNT][4] = {
+        {"Drive", "Tom", "Mix", NULL}, {"Veloc.", "Prof.", "Mix", NULL}, {"Veloc.", "Prof.", "Realim.", "Mix"},
+        {"Repetições", "Mix", "Tempo", NULL}, {"Tamanho", "Abafar", "Mix", NULL}};
+    Color kc = on ? col : (Color){91, 100, 114, 255};
+    int nk = 0;
+    for (int k = 0; k < 4; k++) {
+        if (K[t][k] < 0) continue;
+        if (t == FX_DELAY && k == 2 && param_geti(P_DLY_SYNC) != 0) continue; /* tempo livre só em "Livre" */
+        float cx = r.x + r.width * ((nk % 2) ? 0.73f : 0.27f), cy = r.y + 136 + (nk / 2) * (t == FX_DELAY ? 84.0f : 92.0f);
+        if (!ghost) ui_knob(cx, cy, 48, K[t][k], kc, KL[t][k]);
+        else ui_knob_draw(cx, cy, 48, param_get_norm(K[t][k]), kc, false);
+        nk++;
+    }
+    if (t == FX_DELAY && !ghost) {
+        float y = r.y + 208;
+        ui_caption("TEMPO", r.x + 14, y, C_TEXT2);
+        int s = param_geti(P_DLY_SYNC);
+        if (ui_pills((Rectangle){r.x + 14, y + 16, r.width - 28, 47}, 3, 21, "Livre;1/4;1/8;1/8 ·;1/16;1/4 T", &s, true))
+            param_set(P_DLY_SYNC, (float)s);
+        ui_text("Ping-pong", r.x + 14, y + 74, 12, UI_REGULAR, C_TEXT);
+        ui_param_switch((Rectangle){r.x + r.width - 58, y + 68, 44, 24}, P_DLY_PING, C_CYAN);
+        ui_tooltip((Rectangle){r.x + 14, y + 68, r.width - 28, 24}, "As repetições alternam entre a esquerda e a direita.");
     }
 
-    group((Rectangle){x1, 400, w, 108}, "LFO");
-    pcontrol(g, (Rectangle){x1 + 10, 418, w - 20, 22}, P_LFO_RATE);
-    pcontrol(g, (Rectangle){x1 + 10, 448, w - 20, 22}, P_MODWHEEL);
-    text("Roda de mod. = vibrato (aba Modulação)", x1 + 10, 480, C_DIM);
-
-    group((Rectangle){x2, 400, w, 108}, "Informações");
-    char t[160];
-    Engine *e = g->e;
-    snprintf(t, sizeof t, "Vozes tocando: %d de %d", synth_active_voices(&e->synth), MAX_VOICES);
-    text(t, x2 + 12, 416, C_DIM);
-    if (e->dev_ok) {
-        snprintf(t, sizeof t, "Áudio: %u Hz, buffer %.1f ms", e->dev_rate, e->dev_latency_ms);
-    } else snprintf(t, sizeof t, "Áudio: desligado");
-    text(t, x2 + 12, 440, C_DIM);
-    snprintf(t, sizeof t, "Saída: %.36s", e->dev_ok && e->dev_name[0] ? e->dev_name : "padrão do sistema");
-    text(t, x2 + 12, 464, C_DIM);
+    /* pedal de pisar */
+    Rectangle fs = {r.x + r.width / 2 - 26, r.y + r.height - 80, 52, 52};
+    bool fh = ui_hover(fs);
+    Vector2 fc = {fs.x + 26, fs.y + 26};
+    DrawCircleV((Vector2){fc.x, fc.y + 3}, 27, (Color){10, 12, 15, 255});
+    DrawCircleV(fc, 27, on ? col : (Color){42, 48, 58, 255});
+    DrawCircleV(fc, 24, fh ? C_CTRL_HOV : C_CTRL);
+    DrawCircleV(fc, 15, (Color){42, 48, 58, 255});
+    DrawCircleV((Vector2){fc.x, fc.y - 2}, 14, (Color){52, 58, 70, 255});
+    ui_text_center(on ? "LIGADO" : "DESLIGADO", (Rectangle){r.x, r.y + r.height - 22, r.width, 14}, 11, UI_BOLD, on ? col : (Color){140, 149, 164, 255});
+    if (!ghost) {
+        if (ui_learn()) ui_learn_zone(fs, fx_param_on(t));
+        else if (ui_clicked(fs)) param_set(fx_param_on(t), !on);
+        ui_tooltip(fs, on ? "Clique para desligar" : "Clique para ligar");
+    }
 }
 
 static void tab_effects(Gui *g)
 {
-    /* resumo da cadeia */
-    char chain[256] = "Cadeia:  synth";
+    Rectangle area = {324, 118, 944, 446};
+    /* cadeia de sinal */
+    Rectangle bar = {area.x, area.y, area.width, 44};
+    ui_panel(bar, 12, C_PANEL, C_BORDER);
+    float x = bar.x + 16;
+    ui_caption("CADEIA DE SINAL", x, bar.y + 16, C_TEXT2);
+    x += 130;
+    const char *names[8];
+    Color cols[8];
+    int n = 0;
+    names[n] = param_geti(P_INPUT_MODE) == 2 ? "Synth + Guitarra" : "Synth";
+    cols[n++] = C_TEXT;
     for (int s = 0; s < FX_COUNT; s++) {
         int t = param_geti(P_FX_ORDER0 + s);
-        if (!param_geti(fx_param_on(t))) continue;
-        strncat(chain, "  ->  ", sizeof chain - strlen(chain) - 1);
-        strncat(chain, fx_name(t), sizeof chain - strlen(chain) - 1);
+        if (param_geti(fx_param_on(t))) { names[n] = fx_name(t); cols[n++] = FX_COLOR[t]; }
     }
-    strncat(chain, "  ->  looper  ->  saída", sizeof chain - strlen(chain) - 1);
-    text(chain, 360, 94, C_DIM);
+    names[n] = "Looper"; cols[n++] = C_TEXT;
+    names[n] = "Saída"; cols[n++] = C_TEXT;
+    for (int i = 0; i < n; i++) {
+        float tw = ui_text_width(names[i], 12, UI_SEMIBOLD) + 18;
+        Rectangle c = {x, bar.y + 9, tw, 26};
+        ui_panel(c, 8, (Color){25, 29, 36, 255}, C_BORDER2);
+        ui_text_center(names[i], c, 12, UI_SEMIBOLD, cols[i]);
+        x += tw;
+        if (i < n - 1) { ui_icon("arrow", x + 4, bar.y + 15, 14, (Color){107, 115, 128, 255}); x += 22; }
+    }
 
-    static const int ctl[FX_COUNT][4] = {
-        {P_DIST_DRIVE, P_DIST_TONE, P_DIST_MIX, -1},
-        {P_CHO_RATE, P_CHO_DEPTH, P_CHO_MIX, -1},
-        {P_PHA_RATE, P_PHA_DEPTH, P_PHA_FB, P_PHA_MIX},
-        {P_DLY_SYNC, P_DLY_TIME, P_DLY_FB, P_DLY_MIX},
-        {P_REV_SIZE, P_REV_DAMP, P_REV_MIX, -1},
-    };
+    /* pedais */
+    float pw = 172, gap = (area.width - 5 * pw) / 4, py = area.y + 54, ph = area.height - 54;
+    int order[FX_COUNT];
+    for (int s = 0; s < FX_COUNT; s++) order[s] = param_geti(P_FX_ORDER0 + s);
+
+    int drop = -1;
+    if (g->drag_fx >= 0) {
+        float mx = ui_mouse().x - g->drag_off + pw / 2;
+        drop = (int)((mx - area.x) / (pw + gap));
+        drop = drop < 0 ? 0 : (drop > FX_COUNT - 1 ? FX_COUNT - 1 : drop);
+        if (!IsMouseButtonDown(MOUSE_BUTTON_LEFT)) { /* soltou: reordena */
+            int moving = order[g->drag_fx];
+            int tmp[FX_COUNT], k = 0;
+            for (int s = 0; s < FX_COUNT; s++) if (s != g->drag_fx) tmp[k++] = order[s];
+            for (int s = FX_COUNT - 1; s > drop; s--) tmp[s] = tmp[s - 1];
+            tmp[drop] = moving;
+            for (int s = 0; s < FX_COUNT; s++) param_set(P_FX_ORDER0 + s, (float)tmp[s]);
+            g->drag_fx = -1;
+            set_status(g, "Ordem dos efeitos alterada");
+            return;
+        }
+    }
+    /* posições: com arraste, os outros abrem espaço */
+    int vis = 0;
     for (int s = 0; s < FX_COUNT; s++) {
-        int t = param_geti(P_FX_ORDER0 + s);
-        float y = 118 + s * 79.0f;
-        Rectangle row = {356, y, 906, 73};
-        bool on = param_geti(fx_param_on(t));
-        if (on) DrawRectangleRec(row, Fade(C_ACCENT, 0.10f));
-        DrawRectangleLinesEx(row, 1, on ? Fade(C_ACCENT, 0.6f) : C_LINE);
-
-        char num[4];
-        snprintf(num, sizeof num, "%d", s + 1);
-        text(num, 364, y + 28, on ? C_ACCENT : C_DIM);
-        if (GuiButton((Rectangle){382, y + 6, 28, 28}, "#121#") && s > 0) {
-            int a = param_geti(P_FX_ORDER0 + s - 1);
-            param_set(P_FX_ORDER0 + s - 1, (float)t);
-            param_set(P_FX_ORDER0 + s, (float)a);
-        }
-        if (GuiButton((Rectangle){382, y + 39, 28, 28}, "#120#") && s < FX_COUNT - 1) {
-            int b = param_geti(P_FX_ORDER0 + s + 1);
-            param_set(P_FX_ORDER0 + s + 1, (float)t);
-            param_set(P_FX_ORDER0 + s, (float)b);
-        }
-        pcontrol_ex(g, (Rectangle){422, y + 8, 140, 24}, fx_param_on(t), 0, 0);
-        if (t == FX_DELAY) pcontrol_ex(g, (Rectangle){422, y + 42, 140, 24}, P_DLY_PING, 0, 0);
-
-        for (int k = 0; k < 4; k++) {
-            if (ctl[t][k] < 0) continue;
-            float cx = 580 + (k % 2) * 344.0f, cy = y + 8 + (k / 2) * 34.0f;
-            pcontrol_ex(g, (Rectangle){cx, cy, 334, 24}, ctl[t][k], 110, 84);
-        }
+        if (s == g->drag_fx) continue;
+        if (vis == drop) vis++;
+        Rectangle r = {area.x + vis * (pw + gap), py, pw, ph};
+        if (vis > 0) DrawRectangleRec((Rectangle){r.x - gap, py + ph / 2 - 2, gap, 4}, (Color){42, 48, 58, 255});
+        pedal(g, r, s, order[s], false);
+        vis++;
+    }
+    if (g->drag_fx >= 0) {
+        Rectangle slot = {area.x + drop * (pw + gap), py, pw, ph};
+        ui_rect_lines(slot, 18, 2, Fade(FX_COLOR[order[g->drag_fx]], 0.6f));
+        Rectangle r = {ui_mouse().x - g->drag_off, py - 6, pw, ph};
+        pedal(g, r, g->drag_fx, order[g->drag_fx], true);
     }
 }
 
+/* ---------- modulação ---------- */
 static void tab_modulation(Gui *g)
 {
-    text("Cada cabo liga uma FONTE a um DESTINO. \"Via\" multiplica pela segunda fonte:", 360, 96, C_DIM);
-    text("ex.: LFO via Roda mod. -> Altura = vibrato controlado pela roda. Quantidade: altura em", 360, 116, C_DIM);
-    text("semitons, corte em oitavas. Valores negativos invertem o efeito.", 360, 136, C_DIM);
-    float cols[4] = {440, 640, 840, 1010};
-    const char *hdr[4] = {"Fonte", "Via", "Destino", "Quantidade"};
-    for (int i = 0; i < 4; i++) text(hdr[i], cols[i], 170, C_TEXT);
+    (void)g;
+    Rectangle area = {324, 118, 944, 446};
+    ui_card(area, "MATRIZ DE MODULAÇÃO", C_AMBER);
+    ui_text("Cada cabo liga uma FONTE a um DESTINO. \"Via\" multiplica pela segunda fonte: LFO via Roda mod. -> Altura = vibrato na roda.",
+            area.x + 16, area.y + 38, 12, UI_REGULAR, C_TEXT2);
+    float cols[4] = {area.x + 110, area.x + 330, area.x + 550, area.x + 790};
+    const char *hdr[4] = {"FONTE", "VIA (multiplica)", "DESTINO", "QUANTIDADE"};
+    for (int i = 0; i < 4; i++) ui_caption(hdr[i], cols[i], area.y + 66, C_TEXT2);
+    static const char *SRC = "Nenhuma;LFO;Env. filtro;Velocity;Roda mod.;Nível guitarra";
+    static const char *DST = "Altura;Corte;Volume;Mistura OSC";
+    static int vals[MOD_SLOTS][3];
     for (int i = 0; i < MOD_SLOTS; i++) {
-        float y = 196 + i * 50.0f;
+        float y = area.y + 88 + i * 58.0f;
+        bool active = param_geti(P_MOD_SRC(i)) != 0 && fabsf(param_get(P_MOD_AMT(i))) > 0.001f;
+        ui_panel((Rectangle){area.x + 14, y, area.width - 28, 50}, 10, active ? (Color){24, 28, 34, 255} : C_WELL, C_BORDER);
+        ui_led(area.x + 32, y + 25, 4, active, C_AMBER);
         char lab[16];
         snprintf(lab, sizeof lab, "Cabo %d", i + 1);
-        bool active = param_geti(P_MOD_SRC(i)) != 0 && param_get(P_MOD_AMT(i)) != 0;
-        text(lab, 362, y + 4, active ? C_ACCENT : C_DIM);
-        pcontrol_ex(g, (Rectangle){cols[0], y, 190, 28}, P_MOD_SRC(i), 0, 0);
-        pcontrol_ex(g, (Rectangle){cols[1], y, 190, 28}, P_MOD_VIA(i), 0, 0);
-        pcontrol_ex(g, (Rectangle){cols[2], y, 160, 28}, P_MOD_DST(i), 0, 0);
-        pcontrol_ex(g, (Rectangle){cols[3], y + 2, 252, 24}, P_MOD_AMT(i), 0, 70);
+        ui_text(lab, area.x + 46, y + 17, 12.5f, UI_SEMIBOLD, active ? C_TEXT : C_TEXT2);
+        vals[i][0] = param_geti(P_MOD_SRC(i));
+        vals[i][1] = param_geti(P_MOD_VIA(i));
+        vals[i][2] = param_geti(P_MOD_DST(i));
+        if (ui_dropdown((Rectangle){cols[0], y + 8, 200, 34}, SRC, &vals[i][0], DD_MOD + i * 3)) param_set(P_MOD_SRC(i), (float)vals[i][0]);
+        if (ui_dropdown((Rectangle){cols[1], y + 8, 200, 34}, SRC, &vals[i][1], DD_MOD + i * 3 + 1)) param_set(P_MOD_VIA(i), (float)vals[i][1]);
+        if (ui_dropdown((Rectangle){cols[2], y + 8, 220, 34}, DST, &vals[i][2], DD_MOD + i * 3 + 2)) param_set(P_MOD_DST(i), (float)vals[i][2]);
+        /* quantidade: barra bipolar arrastável */
+        Rectangle b = {cols[3], y + 19, 90, 12};
+        float v = param_get_norm(P_MOD_AMT(i));
+        ui_rect(b, 6, (Color){35, 40, 49, 255});
+        float mid = b.x + b.width / 2, px = b.x + b.width * v;
+        DrawRectangleRec((Rectangle){fminf(mid, px), b.y + 2, fabsf(px - mid), b.height - 4}, active ? C_AMBER : (Color){91, 100, 114, 255});
+        DrawRectangleRec((Rectangle){mid - 0.5f, b.y - 3, 1, b.height + 6}, C_TEXT2);
+        DrawCircleV((Vector2){px, b.y + b.height / 2}, 7, C_TEXT);
+        Rectangle hit = {b.x - 8, y + 6, b.width + 16, 38};
+        if (ui_learn()) ui_learn_zone(hit, P_MOD_AMT(i));
+        else {
+            if (ui_hover(hit) && IsMouseButtonDown(MOUSE_BUTTON_LEFT)) param_set_norm(P_MOD_AMT(i), (ui_mouse().x - b.x) / b.width);
+            if (ui_hover(hit)) param_set_norm(P_MOD_AMT(i), v + GetMouseWheelMove() * 0.01f);
+            if (ui_hover(hit) && IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) param_set(P_MOD_AMT(i), 0);
+        }
+        ui_tooltip(hit, "Arraste para ajustar. Meio = nada; à direita soma, à esquerda inverte. Botão direito zera.");
+        char t[16];
+        param_format(P_MOD_AMT(i), t, sizeof t);
+        ui_text(t, b.x + b.width + 12, y + 17, 12.5f, UI_SEMIBOLD, C_TEXT);
     }
 }
 
-static void tempo_group(Gui *g, Rectangle r)
+/* ---------- tempo (compartilhado por arp e looper) ---------- */
+static void tempo_card(Gui *g, Rectangle r)
 {
-    group(r, "Tempo");
-    float x = r.x + 10, w = r.width - 20;
-    pcontrol(g, (Rectangle){x, r.y + 18, w, 24}, P_BPM);
-    if (GuiButton((Rectangle){x, r.y + 52, 150, 28}, "Tap tempo")) {
+    ui_card(r, "TEMPO", C_AMBER);
+    int beat = atomic_load(&g->e->beat);
+    for (int i = 0; i < 4; i++) ui_led(r.x + r.width - 74 + i * 17.0f, r.y + 19, 5, i == beat, i == 0 ? C_AMBER : C_TEXT);
+    bool wide = r.width >= 300;
+    Rectangle st = {r.x + 14, r.y + 42, wide ? 150 : r.width - 28, 56};
+    ui_panel(st, 12, C_WELL, C_BORDER);
+    if (ui_button_icon((Rectangle){st.x + 4, st.y + 13, 30, 30}, "minus", "Diminuir BPM")) param_set(P_BPM, param_get(P_BPM) - 1);
+    if (ui_button_icon((Rectangle){st.x + st.width - 34, st.y + 13, 30, 30}, "plus", "Aumentar BPM")) param_set(P_BPM, param_get(P_BPM) + 1);
+    char t[16];
+    snprintf(t, sizeof t, "%d", param_geti(P_BPM));
+    ui_text_center(t, (Rectangle){st.x + 34, st.y + 4, st.width - 68, 34}, 28, UI_BOLD, C_TEXT);
+    ui_text_center("BPM", (Rectangle){st.x + 34, st.y + 36, st.width - 68, 14}, 10, UI_SEMIBOLD, C_TEXT2);
+    Rectangle bpmhit = {st.x + 34, st.y, st.width - 68, st.height};
+    if (ui_hover(bpmhit)) param_set(P_BPM, param_get(P_BPM) + GetMouseWheelMove());
+    ui_tooltip(bpmhit, "Andamento. Use a roda do mouse, os botões ou o Tap.");
+    Rectangle tap = wide ? (Rectangle){st.x + st.width + 10, st.y, r.width - st.width - 38, 56}
+                         : (Rectangle){r.x + 14, st.y + st.height + 8, r.width - 28, 38};
+    if (ui_button(tap, "@tap Tap", UI_BTN_AMBER)) {
         double now = GetTime();
         if (g->ntaps > 0 && now - g->taps[(g->ntaps - 1) % 4] > 2.0) g->ntaps = 0;
         g->taps[g->ntaps % 4] = now;
@@ -808,294 +1152,300 @@ static void tempo_group(Gui *g, Rectangle r)
             param_set(P_BPM, (float)(60.0 * (n - 1) / (last - first)));
         }
     }
-    pcontrol_ex(g, (Rectangle){x + 170, r.y + 54, 150, 24}, P_METRO_ON, 0, 0);
-    int beat = atomic_load(&g->e->beat);
-    for (int i = 0; i < 4; i++) {
-        Color c = i == beat ? (i == 0 ? C_ACCENT : C_TEXT) : Fade(C_TEXT, 0.15f);
-        DrawCircle((int)(x + w - 70 + i * 20), (int)(r.y + 66), 7, c);
-    }
-    pcontrol(g, (Rectangle){x, r.y + 90, w, 24}, P_METRO_VOL);
+    ui_tooltip(tap, "Clique no ritmo da música (3 ou 4 vezes) para acertar o BPM.");
+    float y = tap.y + tap.height + 16;
+    ui_text("Metrônomo", r.x + 14, y + 4, 12.5f, UI_REGULAR, C_TEXT);
+    ui_param_switch((Rectangle){r.x + r.width - 58, y, 44, 24}, P_METRO_ON, C_AMBER);
+    ui_knob(r.x + r.width / 2, y + 76, 44, P_METRO_VOL, C_AMBER, "Vol. metrônomo");
 }
 
+/* ---------- arpejador + harmonizador ---------- */
 static void tab_arp(Gui *g)
 {
-    group((Rectangle){356, 96, 446, 412}, "Arpejador");
-    float x = 366, w = 426;
-    bool on = param_geti(P_ARP_ON);
-    if (GuiToggle((Rectangle){x, 114, w, 36}, on ? "#131#Arpejador LIGADO" : "#131#Arpejador desligado", &on) || on != (bool)param_geti(P_ARP_ON))
-        param_set(P_ARP_ON, on);
-    pcontrol(g, (Rectangle){x, 166, w, 26}, P_ARP_MODE);
-    pcontrol(g, (Rectangle){x, 202, w, 26}, P_ARP_RATE);
-    pcontrol(g, (Rectangle){x, 238, w, 24}, P_ARP_OCT);
-    pcontrol(g, (Rectangle){x, 272, w, 24}, P_ARP_GATE);
-    pcontrol_ex(g, (Rectangle){x, 308, w, 24}, P_ARP_HOLD, 0, 0);
-    static const char *help[] = {
-        "Segure um acorde (teclado, MIDI ou piano):",
-        "as notas tocam uma de cada vez, no BPM.",
-        "Com a guitarra, a nota vira arpejo.",
-        "Segurar: continua depois de soltar.",
-    };
-    for (int i = 0; i < 4; i++) text(help[i], 366, 346 + i * 20.0f, C_DIM);
-    text("O BPM também comanda o metrônomo", 366, 436, C_DIM);
-    text("e o delay sincronizado.", 366, 456, C_DIM);
+    Rectangle area = {324, 118, 944, 446};
+    float w1 = 352, w2 = 352, w3 = area.width - w1 - w2 - 20;
+    Rectangle a = {area.x, area.y, w1, area.height}, h = {a.x + w1 + 10, area.y, w2, area.height};
+    Rectangle tc = {h.x + w2 + 10, area.y, w3, area.height};
 
-    tempo_group(g, (Rectangle){818, 96, 446, 126});
-
-    group((Rectangle){818, 236, 446, 272}, "Harmonizador");
-    float hx = 828, hw = 426;
-    pcontrol_ex(g, (Rectangle){hx, 252, hw, 24}, P_HARM_ON, 0, 0);
-    pcontrol(g, (Rectangle){hx, 284, hw, 26}, P_HARM_INTERVAL);
-    pcontrol(g, (Rectangle){hx, 316, hw, 26}, P_HARM_KEY);
-    pcontrol(g, (Rectangle){hx, 348, hw, 26}, P_HARM_SCALE);
-    pcontrol(g, (Rectangle){hx, 380, hw, 24}, P_HARM_LEVEL);
-    pcontrol(g, (Rectangle){hx, 410, hw, 26}, P_HARM_SRC);
-    /* exemplo ao vivo: a nota da guitarra (se houver) ou a tônica */
-    int src_note = atomic_load(&g->e->guitar.st_note);
-    if (src_note < 0) src_note = 60 + param_geti(P_HARM_KEY);
-    int hs[2], n = engine_harmony_notes(src_note, hs);
-    char ex[96], a1[8], a2[8], a3[8];
-    note_name(src_note, a1, sizeof a1);
-    note_name(n > 0 ? hs[0] : -1, a2, sizeof a2);
-    note_name(n > 1 ? hs[1] : -1, a3, sizeof a3);
-    if (n > 1) snprintf(ex, sizeof ex, "Exemplo: %s -> %s + %s", a1, a2, a3);
-    else snprintf(ex, sizeof ex, "Exemplo: %s -> %s", a1, a2);
-    text(ex, hx, 446, param_geti(P_HARM_ON) ? C_ACCENT : C_DIM);
-    text("Maior/Menor: segue a escala do tom.", hx, 470, C_DIM);
-}
-
-static void tab_midi_out(Gui *g)
-{
-    group((Rectangle){356, 96, 446, 412}, "Saída MIDI");
-    float x = 366, w = 426;
-    pcontrol_ex(g, (Rectangle){x, 114, w, 26}, P_MOUT_SRC, 70, 0);
-    GuiLabel((Rectangle){x, 152, w, 20}, "Destino");
-    defer_dropdown(g, (Rectangle){x, 172, w - 92, 26}, g->mout_items, &g->mout_active, &g->mout_edit, DD_MOUT);
-    if (GuiButton((Rectangle){x + w - 86, 172, 86, 26}, "#211#Atualizar")) {
-        midi_close();
-        midi_out_close();
-        build_device_lists(g);
-        apply_midi(g);
-        apply_midi_out(g);
-    }
-    char st[200];
-    if (midi_out_is_open()) snprintf(st, sizeof st, "Enviando para: %.40s", midi_out_open_name());
-    else snprintf(st, sizeof st, param_geti(P_MOUT_SRC) ? "Saída fechada (veja o destino)" : "Desligada");
-    text(st, x, 210, midi_out_is_open() ? (Color){80, 220, 120, 255} : C_DIM);
-    pcontrol(g, (Rectangle){x, 244, w, 24}, P_MOUT_CH);
-    pcontrol(g, (Rectangle){x, 276, w, 24}, P_MOUT_BEND);
-    if (GuiButton((Rectangle){x, 316, 200, 30}, "#131#Enviar nota de teste") && midi_out_is_open()) midi_out_test();
-    /* luz de atividade */
-    int act = midi_out_activity();
-    if (act != g->mout_seen) { g->mout_seen = act; g->mout_blink = GetTime(); }
-    bool lit = GetTime() - g->mout_blink < 0.08;
-    DrawCircle((int)(x + 226), 331, 8, lit ? (Color){80, 220, 120, 255} : Fade(C_TEXT, 0.15f));
-    text("atividade", x + 240, 323, C_DIM);
-    static const char *what[] = {
-        "Guitarra: só a nota que você toca, com",
-        "bends (pitch bend). Tudo: também teclado,",
-        "piano, MIDI, harmonia e arpejo.",
-        "Configure no instrumento da DAW a mesma",
-        "faixa de pitch bend que está aqui.",
-    };
-    for (int i = 0; i < 5; i++) text(what[i], x, 364 + i * 20.0f, C_DIM);
-
-    group((Rectangle){818, 96, 446, 412}, "Como usar na DAW");
-#if defined(_WIN32)
-    static const char *how[] = {
-        "No Windows não há porta virtual pronta:",
-        "1. Instale o loopMIDI (gratuito).",
-        "2. Crie uma porta (botão +).",
-        "3. Clique em Atualizar e escolha a",
-        "   porta como Destino.",
-        "4. Na DAW (Reaper, FL Studio, Ableton...)",
-        "   ative essa porta como entrada MIDI.",
-        "5. Crie uma trilha com um instrumento",
-        "   virtual e arme a gravação.",
-        "",
-        "Para ouvir só a DAW: Mistura em",
-        "\"só gtr\" ou Nível synth em 0.",
-    };
-#elif defined(__APPLE__)
-    static const char *how[] = {
-        "1. Destino: Porta virtual \"Sintetizador\".",
-        "2. Na DAW (Logic, GarageBand, Reaper...)",
-        "   a entrada \"Sintetizador\" aparece",
-        "   sozinha nas entradas MIDI.",
-        "3. Crie uma trilha com um instrumento",
-        "   virtual e arme a gravação.",
-        "4. Toque: a guitarra controla a trilha.",
-        "",
-        "Para ouvir só a DAW: Mistura em",
-        "\"só gtr\" ou Nível synth em 0.",
-        "",
-        "",
-    };
-#else
-    static const char *how[] = {
-        "1. Destino: Porta virtual \"Sintetizador\".",
-        "2. Na DAW (Reaper, Ardour, LMMS, Bitwig)",
-        "   ative a entrada MIDI \"Sintetizador\"",
-        "   (ALSA; no JACK use a2jmidid).",
-        "3. Crie uma trilha com um instrumento",
-        "   virtual e arme a gravação.",
-        "4. Toque: a guitarra controla a trilha.",
-        "",
-        "Para ouvir só a DAW: Mistura em",
-        "\"só gtr\" ou Nível synth em 0.",
-        "",
-        "",
-    };
-#endif
-    for (int i = 0; i < 12; i++) text(how[i], 830, 116 + i * 20.0f, C_DIM);
-    text("A nota sai uns 20-30 ms depois da", 830, 368, C_DIM);
-    text("palhetada (tempo de reconhecer).", 830, 388, C_DIM);
-}
-
-static void looper_main_button(Gui *g) { looper_command(&g->e->looper, LCMD_REC); }
-
-static void tab_looper(Gui *g)
-{
-    Looper *lp = &g->e->looper;
-    int st = atomic_load(&lp->st_state);
-    int pos = atomic_load(&lp->st_pos), len = atomic_load(&lp->st_len);
-    float sr = g->e->sr;
-
-    group((Rectangle){356, 96, 446, 412}, "Looper");
-    static const char *main_label[] = {"#135#Gravar", "#135#Fechar o loop", "#135#Gravar por cima", "#133#Parar overdub", "#135#Gravar por cima"};
-    static const char *state_label[] = {"Vazio", "GRAVANDO", "Tocando", "GRAVANDO POR CIMA", "Parado"};
-    if (GuiButton((Rectangle){366, 114, 426, 64}, main_label[st])) looper_main_button(g);
-    float bw = 101;
-    if (GuiButton((Rectangle){366, 188, bw, 34}, "#131#Tocar")) looper_command(lp, LCMD_PLAY);
-    if (GuiButton((Rectangle){366 + bw + 7, 188, bw, 34}, "#133#Parar")) looper_command(lp, LCMD_STOP);
-    if (GuiButton((Rectangle){366 + 2 * (bw + 7), 188, bw, 34}, "#56#Desfazer")) looper_command(lp, LCMD_UNDO);
-    if (GuiButton((Rectangle){366 + 3 * (bw + 7), 188, bw, 34}, "#143#Limpar")) looper_command(lp, LCMD_CLEAR);
-
-    Color sc = (st == LOOP_RECORDING || st == LOOP_OVERDUB) ? RED : (st == LOOP_PLAYING ? (Color){80, 220, 120, 255} : C_DIM);
-    text_size(state_label[st], 366, 234, 32, sc);
-    char t[96];
-    if (st == LOOP_RECORDING) snprintf(t, sizeof t, "%.1f s (máx. 60 s)", len / sr);
-    else if (st != LOOP_EMPTY) snprintf(t, sizeof t, "%.1f / %.1f s", pos / sr, len / sr);
-    else t[0] = 0;
-    float prog = (st == LOOP_RECORDING) ? len / (60.0f * sr) : (len > 0 ? (float)pos / len : 0);
-    GuiProgressBar((Rectangle){366, 274, 426, 18}, NULL, NULL, &prog, 0, 1);
-    text(t, 366, 298, C_TEXT);
-    pcontrol(g, (Rectangle){366, 330, 426, 24}, P_LOOP_VOL);
-    group((Rectangle){818, 236, 446, 272}, "Como usar");
-    static const char *help[] = {
-        "1. \"Gravar\" e toque uma base.",
-        "2. \"Fechar o loop\": ela passa a",
-        "   repetir sem parar.",
-        "3. \"Gravar por cima\" soma camadas.",
-        "",
-        "Desfazer: apaga a última camada.",
-        "Enter: aperta o botão grande",
-        "(bom para tocar guitarra).",
-        "",
-        "O looper grava o som com efeitos;",
-        "o metrônomo fica de fora. Máx. 60 s.",
-    };
-    for (int i = 0; i < 11; i++) text(help[i], 830, 256 + i * 20.0f, C_DIM);
-    tempo_group(g, (Rectangle){818, 96, 446, 126});
-}
-
-/* ------------------------------------------------------------------ */
-/* Barra superior, osciloscópio e status                               */
-/* ------------------------------------------------------------------ */
-static void draw_top_bar(Gui *g)
-{
-    DrawRectangle(0, 0, W, 44, C_PANEL);
-    DrawLine(0, 44, W, 44, C_LINE);
-    text("SINTETIZADOR", 14, 14, C_ACCENT);
-
-    GuiLabel((Rectangle){180, 9, 60, 26}, "Preset");
-    defer_dropdown(g, (Rectangle){236, 9, 220, 26}, g->preset_items, &g->preset_active, &g->preset_edit, DD_PRESET);
-    if (GuiTextBox((Rectangle){464, 9, 150, 26}, g->preset_name, 40, g->name_edit)) {
-        g->name_edit = !g->name_edit;
-        if (g->name_edit) { /* começa com o campo vazio para digitar o nome */
-            snprintf(g->name_backup, sizeof g->name_backup, "%s", g->preset_name);
-            g->preset_name[0] = 0;
-        } else if (!g->preset_name[0]) {
-            snprintf(g->preset_name, sizeof g->preset_name, "%s", g->name_backup);
-        } else {
-            save_preset(g); /* Enter (ou sair do campo) salva */
+    /* --- arpejador --- */
+    ui_card(a, "ARPEJADOR", C_AMBER);
+    ui_param_switch((Rectangle){a.x + a.width - 58, a.y + 8, 44, 24}, P_ARP_ON, C_AMBER);
+    ui_tooltip((Rectangle){a.x + a.width - 58, a.y + 8, 44, 24}, "Liga o arpejador: segure um acorde e as notas tocam uma de cada vez.");
+    Rectangle steps = {a.x + 14, a.y + 40, a.width - 28, 92};
+    ui_panel(steps, 12, C_WELL, C_BORDER);
+    {
+        /* notas que o arpejador vai tocar (leitura aproximada do estado do áudio) */
+        int notes[ARP_MAX_NOTES], n = g->e->arp.count, playing = g->e->arp.playing;
+        if (n > ARP_MAX_NOTES) n = ARP_MAX_NOTES;
+        for (int i = 0; i < n; i++) notes[i] = g->e->arp.order[i];
+        for (int i = 1; i < n; i++) for (int j = i; j > 0 && notes[j - 1] > notes[j]; j--) { int t = notes[j]; notes[j] = notes[j - 1]; notes[j - 1] = t; }
+        int oct = param_geti(P_ARP_OCT), total = n * oct;
+        if (total > 16) total = 16;
+        if (total == 0) ui_text_center("segure um acorde para ver o arpejo", steps, 12, UI_REGULAR, C_TEXT2);
+        float bw = total ? (steps.width - 24 - (total - 1) * 5) / total : 0;
+        for (int i = 0; i < total; i++) {
+            int note = notes[i % n] + 12 * (i / n);
+            float hgt = 14 + (note % 36) * 1.3f;
+            bool on = note == playing && param_geti(P_ARP_ON);
+            Rectangle b = {steps.x + 12 + i * (bw + 5), steps.y + steps.height - 26 - hgt, bw, hgt};
+            ui_rect(b, 4, on ? C_AMBER : (Color){58, 46, 22, 255});
+            char nm[8];
+            note_name(note, nm, sizeof nm);
+            if (bw > 18) ui_text_center(nm, (Rectangle){b.x - 4, steps.y + steps.height - 20, bw + 8, 12}, 9.5f, UI_SEMIBOLD, on ? C_AMBER_HI : C_TEXT2);
         }
     }
-    if (g->name_edit && !g->preset_name[0]) text("digite o nome...", 470, 14, C_DIM);
-    if (GuiButton((Rectangle){618, 9, 82, 26}, "#6#Salvar")) save_preset(g);
+    ui_text("Modo", a.x + 14, a.y + 144, 11, UI_REGULAR, C_TEXT2);
+    int m = param_geti(P_ARP_MODE);
+    if (ui_pills((Rectangle){a.x + 14, a.y + 162, a.width - 28, 70}, 3, 32, "Sobe;Desce;Sobe-desce;Aleatório;Como tocado", &m, false)) param_set(P_ARP_MODE, (float)m);
+    ui_text("Divisão", a.x + 14, a.y + 244, 11, UI_REGULAR, C_TEXT2);
+    int d = param_geti(P_ARP_RATE);
+    if (ui_pills((Rectangle){a.x + 14, a.y + 262, a.width - 28, 32}, 5, 32, "1/4;1/8;1/8 T;1/16;1/32", &d, false)) param_set(P_ARP_RATE, (float)d);
+    ui_knob(a.x + a.width * 0.2f, a.y + 352, 46, P_ARP_OCT, C_AMBER, "Oitavas");
+    ui_knob(a.x + a.width * 0.5f, a.y + 352, 46, P_ARP_GATE, C_AMBER, "Duração");
+    ui_tooltip((Rectangle){a.x + a.width * 0.5f - 30, a.y + 324, 60, 76}, "Quanto cada nota dura dentro do passo.");
+    ui_param_switch((Rectangle){a.x + a.width * 0.8f - 22, a.y + 340, 44, 24}, P_ARP_HOLD, C_AMBER);
+    ui_text_center("SEGURAR", (Rectangle){a.x + a.width * 0.8f - 40, a.y + 380, 80, 13}, 10.5f, UI_SEMIBOLD, C_TEXT2);
+    ui_tooltip((Rectangle){a.x + a.width * 0.8f - 40, a.y + 330, 80, 70}, "Continua tocando depois de soltar as teclas; um acorde novo troca o anterior.");
 
-    bool learn = g->learn;
-    GuiToggle((Rectangle){712, 9, 116, 26}, "#122#MIDI Learn", &learn);
-    if (learn != g->learn) {
-        g->learn = learn;
-        g->learn_target = -1;
-        set_status(g, learn ? "MIDI learn: clique num controle e mova um knob do controlador (botão direito desfaz)"
-                            : "MIDI learn desligado");
+    /* --- harmonizador --- */
+    ui_card(h, "HARMONIZADOR", C_CYAN);
+    ui_param_switch((Rectangle){h.x + h.width - 58, h.y + 8, 44, 24}, P_HARM_ON, C_CYAN);
+    ui_tooltip((Rectangle){h.x + h.width - 58, h.y + 8, 44, 24}, "Acrescenta uma segunda voz (ou um acorde) seguindo o tom e a escala.");
+    Rectangle ex = {h.x + 14, h.y + 40, h.width - 28, 92};
+    ui_panel(ex, 12, C_WELL, C_BORDER);
+    {
+        int src = atomic_load(&g->e->guitar.st_note);
+        if (src < 0) src = 60 + param_geti(P_HARM_KEY);
+        int hs[2], n = engine_harmony_notes(src, hs);
+        char a1[8], a2[8], a3[8];
+        note_name(src, a1, sizeof a1);
+        note_name(n > 0 ? hs[0] : -1, a2, sizeof a2);
+        note_name(n > 1 ? hs[1] : -1, a3, sizeof a3);
+        char right[24];
+        snprintf(right, sizeof right, n > 1 ? "%s+%s" : "%s", a2, a3);
+        bool on = param_geti(P_HARM_ON);
+        float cx = ex.x + ex.width / 2;
+        ui_text_center("VOCÊ TOCA", (Rectangle){ex.x, ex.y + 14, ex.width / 2 - 20, 12}, 10.5f, UI_SEMIBOLD, C_TEXT2);
+        ui_text_center(a1, (Rectangle){ex.x, ex.y + 34, ex.width / 2 - 20, 40}, 32, UI_BOLD, C_TEXT);
+        ui_icon("arrow", cx - 10, ex.y + 48, 20, on ? C_CYAN : C_TEXT2);
+        ui_text_center("HARMONIA", (Rectangle){cx + 20, ex.y + 14, ex.width / 2 - 20, 12}, 10.5f, UI_SEMIBOLD, C_TEXT2);
+        ui_text_center(right, (Rectangle){cx + 20, ex.y + 34, ex.width / 2 - 20, 40}, n > 1 ? 24 : 32, UI_BOLD, on ? C_CYAN_HI : C_TEXT2);
     }
+    ui_text("Intervalo", h.x + 14, h.y + 144, 11, UI_REGULAR, C_TEXT2);
+    int iv = param_geti(P_HARM_INTERVAL);
+    if (ui_pills((Rectangle){h.x + 14, h.y + 162, h.width - 28, 66}, 4, 30, "Terça ↑;Quarta ↑;Quinta ↑;Sexta ↑;Oitava ↑;Terça ↓;Oitava ↓;Acorde", &iv, true))
+        param_set(P_HARM_INTERVAL, (float)iv);
+    ui_text("Tom", h.x + 14, h.y + 240, 11, UI_REGULAR, C_TEXT2);
+    int key = param_geti(P_HARM_KEY);
+    if (ui_pills((Rectangle){h.x + 14, h.y + 258, h.width - 28, 64}, 6, 29, "C;C#;D;D#;E;F;F#;G;G#;A;A#;B", &key, true)) param_set(P_HARM_KEY, (float)key);
+    int sc = param_geti(P_HARM_SCALE);
+    ui_text("Escala", h.x + 14, h.y + 334, 11, UI_REGULAR, C_TEXT2);
+    if (ui_segmented((Rectangle){h.x + 14, h.y + 352, 196, 34}, "Maior;Menor;Fixo", &sc, C_CYAN, C_CYAN_BG, C_CYAN_HI)) param_set(P_HARM_SCALE, (float)sc);
+    ui_tooltip((Rectangle){h.x + 14, h.y + 352, 196, 34}, "Maior/Menor: segue a escala do tom. Fixo: sempre o mesmo intervalo em semitons.");
+    int ap = param_geti(P_HARM_SRC);
+    ui_text("Aplicar em", h.x + 14, h.y + 394, 11, UI_REGULAR, C_TEXT2);
+    if (ui_segmented((Rectangle){h.x + 14, h.y + 410, 196, 30}, "Só guitarra;Tudo", &ap, C_CYAN, C_CYAN_BG, C_CYAN_HI)) param_set(P_HARM_SRC, (float)ap);
+    ui_knob(h.x + h.width - 66, h.y + 378, 46, P_HARM_LEVEL, C_CYAN, "Volume");
 
-    bool rec = recorder_active(&g->rec);
-    char rl[48];
-    if (rec) {
-        double s = GetTime() - g->rec_start;
-        snprintf(rl, sizeof rl, "#133#Parar %02d:%02d", (int)s / 60, (int)s % 60);
-    } else snprintf(rl, sizeof rl, "#135#Gravar WAV");
-    if (rec) DrawRectangle(836, 7, 132, 30, Fade(RED, 0.5f + 0.3f * sinf((float)GetTime() * 6)));
-    if (GuiButton((Rectangle){838, 9, 128, 26}, rl)) toggle_recording(g);
-
-    if (GuiButton((Rectangle){974, 9, 82, 26}, "#113#Pânico")) {
-        Event off = {EV_ALL_OFF, SRC_KEYS, 0, 0, 0};
-        evq_push(&g->e->q_ui, off);
-        looper_command(&g->e->looper, LCMD_STOP);
-        set_status(g, "Todas as notas foram silenciadas");
-    }
-    pcontrol_ex(g, (Rectangle){1066, 11, 150, 22}, P_MASTER, 64, 0);
-
-    /* medidor de saída */
-    float peak = atomic_load(&g->e->peak);
-    g->out_level = fmaxf(peak, g->out_level * 0.92f);
-    Rectangle m = {1224, 10, 46, 24};
-    DrawRectangleRec(m, (Color){20, 20, 24, 255});
-    float db = 20 * log10f(g->out_level + 1e-6f), t = (db + 48) / 48;
-    t = t < 0 ? 0 : (t > 1 ? 1 : t);
-    DrawRectangle((int)m.x, (int)m.y, (int)(m.width * t), (int)m.height, g->out_level > 0.97f ? RED : (Color){80, 200, 120, 255});
-    DrawRectangleLinesEx(m, 1, C_LINE);
+    tempo_card(g, tc);
 }
 
-static void draw_scope(Gui *g, Rectangle r)
+/* ---------- looper ---------- */
+static void tab_looper(Gui *g)
 {
-    DrawRectangleRec(r, (Color){16, 18, 22, 255});
-    DrawRectangleLinesEx(r, 1, C_LINE);
-    DrawLine((int)r.x, (int)(r.y + r.height / 2), (int)(r.x + r.width), (int)(r.y + r.height / 2), Fade(C_LINE, 0.6f));
-    static float buf[SCOPE_SIZE];
-    unsigned end = atomic_load(&g->e->scope_pos);
-    for (int i = 0; i < SCOPE_SIZE; i++) buf[i] = atomic_load_explicit(&g->e->scope[(end + i) & (SCOPE_SIZE - 1)], memory_order_relaxed);
-    /* sincroniza na subida pelo zero para a onda ficar parada */
-    int start = 0;
-    for (int i = 1; i < SCOPE_SIZE / 2; i++) if (buf[i - 1] <= 0 && buf[i] > 0) { start = i; break; }
-    int n = SCOPE_SIZE / 2;
-    float gain = 0;
-    for (int i = 0; i < n; i++) gain = fmaxf(gain, fabsf(buf[start + i]));
-    gain = gain > 0.02f ? 0.45f / gain : 0.45f / 0.02f; /* ajusta a escala sozinho */
-    Vector2 prev = {r.x, r.y + r.height / 2};
-    for (int i = 0; i < n; i++) {
-        Vector2 p = {r.x + r.width * i / (n - 1), r.y + r.height / 2 - buf[start + i] * gain * r.height};
-        if (i) DrawLineEx(prev, p, 1.5f, C_ACCENT);
-        prev = p;
+    Rectangle area = {324, 118, 944, 446};
+    Looper *lp = &g->e->looper;
+    int st = atomic_load(&lp->st_state), pos = atomic_load(&lp->st_pos), len = atomic_load(&lp->st_len);
+    float sr = g->e->sr;
+    Rectangle c = {area.x, area.y, 620, area.height};
+    ui_card(c, "LOOPER", C_RED);
+    static const char *state_label[] = {"vazio", "gravando", "tocando", "gravando por cima", "parado"};
+    Color sc = (st == LOOP_RECORDING || st == LOOP_OVERDUB) ? C_RED : (st == LOOP_PLAYING ? C_GREEN : C_TEXT2);
+    float sw = ui_text_width(state_label[st], 11, UI_SEMIBOLD) + 16;
+    Rectangle chip = {c.x + c.width - sw - 14, c.y + 9, sw, 20};
+    ui_rect(chip, 6, Fade(sc, 0.15f));
+    ui_text_center(state_label[st], chip, 11, UI_SEMIBOLD, sc);
+
+    /* anel de progresso */
+    Vector2 ctr = {c.x + 140, c.y + 170};
+    DrawRing(ctr, 92, 104, 0, 360, 96, C_WELL);
+    float prog = st == LOOP_RECORDING ? len / (60.0f * sr) : (len > 0 ? (float)pos / len : 0);
+    if (st != LOOP_EMPTY && prog > 0.001f) DrawRing(ctr, 92, 104, -90, -90 + 360 * prog, 96, sc);
+    DrawCircleV(ctr, 88, C_PANEL);
+    char t[48];
+    if (st == LOOP_EMPTY) snprintf(t, sizeof t, "--");
+    else snprintf(t, sizeof t, "%.1f s", (st == LOOP_RECORDING ? len : pos) / sr);
+    ui_text_center(t, (Rectangle){ctr.x - 80, ctr.y - 26, 160, 36}, 30, UI_BOLD, C_TEXT);
+    if (st != LOOP_EMPTY && st != LOOP_RECORDING) snprintf(t, sizeof t, "de %.1f s", len / sr);
+    else snprintf(t, sizeof t, st == LOOP_RECORDING ? "máx. 60 s" : "nada gravado");
+    ui_text_center(t, (Rectangle){ctr.x - 80, ctr.y + 12, 160, 16}, 12, UI_REGULAR, C_TEXT2);
+
+    /* botões */
+    static const char *main_label[] = {"@rec Gravar", "@rec Fechar o loop", "@rec Gravar por cima", "@stop Parar de gravar", "@rec Gravar por cima"};
+    float bx = c.x + 290, bw = c.width - 304;
+    Rectangle mb = {bx, c.y + 70, bw, 64};
+    if (ui_button(mb, main_label[st], UI_BTN_DANGER)) looper_command(lp, LCMD_REC);
+    ui_tooltip(mb, "Botão principal (também na tecla Enter): grava, fecha o loop e grava camadas por cima.");
+    float hw = (bw - 8) / 2;
+    if (ui_button((Rectangle){bx, c.y + 144, hw, 40}, "@play Tocar", UI_BTN_NORMAL)) looper_command(lp, LCMD_PLAY);
+    if (ui_button((Rectangle){bx + hw + 8, c.y + 144, hw, 40}, "@stop Parar", UI_BTN_NORMAL)) looper_command(lp, LCMD_STOP);
+    if (ui_button((Rectangle){bx, c.y + 192, hw, 40}, "@undo Desfazer", UI_BTN_NORMAL)) looper_command(lp, LCMD_UNDO);
+    if (ui_button((Rectangle){bx + hw + 8, c.y + 192, hw, 40}, "@trash Limpar", UI_BTN_NORMAL)) looper_command(lp, LCMD_CLEAR);
+    ui_tooltip((Rectangle){bx, c.y + 192, hw, 40}, "Apaga só a última camada gravada por cima.");
+    ui_knob(bx + bw / 2, c.y + 286, 46, P_LOOP_VOL, C_RED, "Volume do loop");
+
+    ui_panel((Rectangle){c.x + 14, c.y + c.height - 82, c.width - 28, 68}, 10, C_WELL, C_BORDER);
+    ui_text("1. Gravar e toque uma base.   2. Fechar o loop: ela passa a repetir.", c.x + 28, c.y + c.height - 70, 12, UI_REGULAR, C_TEXT2);
+    ui_text("3. Gravar por cima para somar camadas.   Desfazer apaga a última.", c.x + 28, c.y + c.height - 52, 12, UI_REGULAR, C_TEXT2);
+    ui_text("Grava o som com efeitos; o metrônomo fica de fora. Enter = botão vermelho.", c.x + 28, c.y + c.height - 34, 12, UI_REGULAR, C_TEXT2);
+
+    tempo_card(g, (Rectangle){c.x + c.width + 10, area.y, area.width - c.width - 10, area.height});
+}
+
+/* ---------- saída MIDI ---------- */
+static void tab_midi_out(Gui *g)
+{
+    Rectangle area = {324, 118, 944, 446};
+    Rectangle c = {area.x, area.y, 470, area.height};
+    ui_card(c, "SAÍDA MIDI", C_CYAN);
+    float x = c.x + 14, w = c.width - 28;
+    ui_text("Enviar", x, c.y + 42, 11, UI_REGULAR, C_TEXT2);
+    int src = param_geti(P_MOUT_SRC);
+    if (ui_segmented((Rectangle){x, c.y + 60, w, 38}, "Nada;Guitarra;Tudo", &src, C_CYAN, C_CYAN_BG, C_CYAN_HI)) param_set(P_MOUT_SRC, (float)src);
+    ui_tooltip((Rectangle){x, c.y + 60, w, 38}, "Guitarra: só a nota tocada, com bends. Tudo: também teclado, MIDI, harmonia e arpejo.");
+    ui_text("Destino", x, c.y + 112, 11, UI_REGULAR, C_TEXT2);
+    if (ui_dropdown((Rectangle){x, c.y + 130, w - 44, 34}, g->mout_items, &g->mout_active, DD_MOUT)) apply_midi_out(g);
+    if (ui_button((Rectangle){x + w - 38, c.y + 130, 38, 34}, "@refresh", UI_BTN_NORMAL)) refresh_all_devices(g);
+    bool open = midi_out_is_open();
+    char st[200];
+    if (open) snprintf(st, sizeof st, "Enviando para: %.40s", midi_out_open_name());
+    else snprintf(st, sizeof st, "%s", src ? "Saída fechada (veja o destino)" : "Desligada");
+    ui_led(x + 5, c.y + 186, 4, open, C_GREEN);
+    ui_text(st, x + 16, c.y + 178, 12.5f, UI_SEMIBOLD, open ? C_GREEN : C_TEXT2);
+
+    ui_knob(x + w * 0.2f, c.y + 248, 46, P_MOUT_CH, C_CYAN, "Canal");
+    ui_knob(x + w * 0.5f, c.y + 248, 46, P_MOUT_BEND, C_CYAN, "Faixa do bend");
+    ui_tooltip((Rectangle){x + w * 0.5f - 34, c.y + 220, 68, 80}, "Configure o mesmo valor (em semitons) no instrumento da DAW.");
+    Rectangle tb = {x + w * 0.8f - 60, c.y + 230, 120, 36};
+    if (ui_button(tb, "@play Testar", UI_BTN_CYAN) && open) midi_out_test();
+    ui_tooltip(tb, "Envia um Dó para conferir se a DAW está recebendo.");
+    int act = midi_out_activity();
+    if (act != g->mout_seen) { g->mout_seen = act; g->mout_blink = GetTime(); }
+    ui_led(x + w * 0.8f - 16, c.y + 290, 5, GetTime() - g->mout_blink < 0.08, C_GREEN);
+    ui_text("atividade", x + w * 0.8f - 4, c.y + 283, 11, UI_REGULAR, C_TEXT2);
+
+    ui_panel((Rectangle){x, c.y + c.height - 98, w, 84}, 10, C_WELL, C_BORDER);
+    ui_text("A nota sai uns 20-30 ms depois da palhetada", x + 12, c.y + c.height - 86, 12, UI_REGULAR, C_TEXT2);
+    ui_text("(tempo de reconhecer). Para ouvir só a DAW, deixe", x + 12, c.y + c.height - 68, 12, UI_REGULAR, C_TEXT2);
+    ui_text("a Mistura em \"só gtr\" ou o Nível do synth em 0.", x + 12, c.y + c.height - 50, 12, UI_REGULAR, C_TEXT2);
+
+    Rectangle h = {c.x + c.width + 10, area.y, area.width - c.width - 10, area.height};
+    ui_card(h, "COMO USAR NA DAW", C_CYAN);
+#if defined(_WIN32)
+    static const char *how[] = {
+        "No Windows não há porta virtual pronta:", "", "1. Instale o loopMIDI (gratuito).", "2. Crie uma porta (botão +).",
+        "3. Clique em Atualizar e escolha a porta", "    como Destino.", "4. Na DAW (Reaper, FL Studio, Ableton...)",
+        "    ative essa porta como entrada MIDI.", "5. Crie uma trilha com um instrumento", "    virtual e arme a gravação."};
+#elif defined(__APPLE__)
+    static const char *how[] = {
+        "1. Destino: Porta virtual \"Sintetizador\".", "2. Na DAW (Logic, GarageBand, Reaper...)", "    a entrada \"Sintetizador\" aparece",
+        "    sozinha nas entradas MIDI.", "3. Crie uma trilha com um instrumento", "    virtual e arme a gravação.",
+        "4. Toque: a guitarra controla a trilha.", "", "", ""};
+#else
+    static const char *how[] = {
+        "1. Destino: Porta virtual \"Sintetizador\".", "2. Na DAW (Reaper, Ardour, LMMS, Bitwig)", "    ative a entrada MIDI \"Sintetizador\"",
+        "    (ALSA; no JACK use a2jmidid).", "3. Crie uma trilha com um instrumento", "    virtual e arme a gravação.",
+        "4. Toque: a guitarra controla a trilha.", "", "", ""};
+#endif
+    for (int i = 0; i < 10; i++) ui_text(how[i], h.x + 16, h.y + 44 + i * 22.0f, 12.5f, UI_REGULAR, i == 0 ? C_TEXT : C_TEXT2);
+}
+
+/* ------------------------------------------------------------------ */
+/* Janelas por cima                                                    */
+/* ------------------------------------------------------------------ */
+static Rectangle save_rect(void) { return (Rectangle){470, 54, 300, 128}; }
+static Rectangle audio_rect(void) { return (Rectangle){UI_W / 2 - 280, 140, 560, 300}; }
+
+static void draw_save_popup(Gui *g)
+{
+    Rectangle r = save_rect();
+    ui_shadow(r, 12);
+    ui_panel(r, 12, (Color){27, 31, 39, 255}, C_BORDER2);
+    ui_caption("SALVAR PRESET", r.x + 16, r.y + 14, C_TEXT2);
+    bool enter = ui_textbox((Rectangle){r.x + 16, r.y + 38, r.width - 32, 34}, g->save_name, 48, TB_SAVE, g->preset_name);
+    if (ui_button((Rectangle){r.x + r.width - 112, r.y + 82, 96, 32}, "Salvar", UI_BTN_AMBER) || enter) {
+        save_preset(g, g->save_name[0] ? g->save_name : g->preset_name);
+        g->save_open = false;
+        ui_focus(0);
     }
-    text("osciloscópio", r.x + 8, r.y + 4, C_DIM);
+    if (ui_button((Rectangle){r.x + r.width - 216, r.y + 82, 96, 32}, "Cancelar", UI_BTN_GHOST) || ui_pressed_outside(r) ||
+        (IsKeyPressed(KEY_ESCAPE) && !ui_typing())) {
+        g->save_open = false;
+        ui_focus(0);
+    }
+}
+
+static void draw_audio_dialog(Gui *g)
+{
+    Rectangle r = audio_rect();
+    DrawRectangle(0, 0, UI_W, UI_H, (Color){0, 0, 0, 120});
+    ui_shadow(r, 16);
+    ui_panel(r, 16, C_PANEL, C_BORDER2);
+    ui_caption("CONFIGURAÇÕES DE ÁUDIO", r.x + 20, r.y + 18, C_TEXT);
+    if (ui_button_icon((Rectangle){r.x + r.width - 40, r.y + 10, 30, 30}, "x", "Fechar")) g->audio_open = false;
+    float x = r.x + 20, w = r.width - 40;
+    ui_text("Saída de áudio", x, r.y + 52, 11, UI_REGULAR, C_TEXT2);
+    if (ui_dropdown((Rectangle){x, r.y + 70, w - 44, 34}, g->out_items, &g->out_active, DD_OUT)) apply_audio(g);
+    if (ui_button((Rectangle){x + w - 38, r.y + 70, 38, 34}, "@refresh", UI_BTN_NORMAL)) { build_device_lists(g); apply_audio(g); }
+    char t[128];
+    if (g->e->dev_ok) snprintf(t, sizeof t, "%u Hz · buffer de %.1f ms", g->e->dev_rate, g->e->dev_latency_ms);
+    else snprintf(t, sizeof t, "áudio desligado");
+    ui_text(t, x, r.y + 118, 12.5f, UI_SEMIBOLD, g->e->dev_ok ? C_TEXT : C_RED);
+    if (g->audio_error[0]) ui_text(g->audio_error, x, r.y + 140, 12, UI_REGULAR, C_RED);
+    if (ui_pressed_outside(r)) g->audio_open = false;
+    if (IsKeyPressed(KEY_ESCAPE)) g->audio_open = false;
 }
 
 /* ------------------------------------------------------------------ */
 /* Laço principal                                                      */
 /* ------------------------------------------------------------------ */
-static void handle_dropdown_changes(Gui *g, int id, int before)
+static void draw_tabs(Gui *g)
 {
-    switch (id) {
-    case DD_PRESET: load_preset(g, g->preset_active); break; /* mesmo preset = recarrega */
-    case DD_OUT:
-    case DD_IN:     if ((id == DD_OUT ? g->out_active : g->in_active) != before) apply_audio(g); break;
-    case DD_MIDI:   if (g->midi_active != before) apply_midi(g); break;
-    case DD_MOUT:   if (g->mout_active != before) apply_midi_out(g); break;
+    Rectangle bar = {324, 68, 944, 40};
+    ui_panel(bar, 12, C_PANEL, C_BORDER);
+    static const char *names[] = {"Som", "Efeitos", "Modulação", "Arp / Harmonia", "Looper", "Saída MIDI"};
+    float w = (bar.width - 8 - 5 * 4) / 6;
+    for (int i = 0; i < 6; i++) {
+        Rectangle t = {bar.x + 4 + i * (w + 4), bar.y + 4, w, 32};
+        bool on = g->tab == i, hov = ui_hover(t);
+        if (on) { ui_rect(t, 9, C_AMBER_BG); ui_rect_lines(t, 9, 1, (Color){92, 68, 22, 255}); }
+        else if (hov) ui_rect(t, 9, C_CTRL);
+        ui_text_center(names[i], t, 13, on ? UI_SEMIBOLD : UI_REGULAR, on ? C_AMBER_HI : C_TEXT3);
+        if (ui_clicked(t)) g->tab = i;
     }
+}
+
+static void draw_status_bar(Gui *g)
+{
+    DrawRectangle(0, UI_H - 28, UI_W, 28, C_BAR);
+    DrawRectangle(0, UI_H - 29, UI_W, 1, (Color){31, 36, 44, 255});
+    float y = UI_H - 21;
+    if (GetTime() - g->status_time < 8 && g->status[0]) {
+        ui_text(g->status, 16, y, 11.5f, UI_REGULAR, C_TEXT);
+        return;
+    }
+    char t[200];
+    ui_led(20, y + 7, 3.5f, g->e->dev_ok, C_GREEN);
+    if (g->e->dev_ok) snprintf(t, sizeof t, "Áudio %u Hz · buffer %.1f ms", g->e->dev_rate, g->e->dev_latency_ms);
+    else snprintf(t, sizeof t, "Áudio desligado");
+    ui_text(t, 30, y, 11.5f, UI_REGULAR, C_TEXT2);
+    float x = 30 + ui_text_width(t, 11.5f, UI_REGULAR) + 22;
+    if (midi_out_is_open()) {
+        snprintf(t, sizeof t, "Saída MIDI: %.40s", midi_out_open_name());
+        ui_text(t, x, y, 11.5f, UI_REGULAR, C_TEXT2);
+    }
+    ui_text_right(ui_learn() ? "MIDI LEARN ATIVO" : "F1 tela cheia · Espaço sustain · Enter looper", UI_W - 16, y, 11.5f,
+                  ui_learn() ? UI_SEMIBOLD : UI_REGULAR, ui_learn() ? C_AMBER : C_TEXT2);
 }
 
 int gui_run(Engine *e, const GuiOptions *opt)
@@ -1104,8 +1454,8 @@ int gui_run(Engine *e, const GuiOptions *opt)
     Gui *g = &gs;
     memset(g, 0, sizeof *g);
     g->e = e;
-    g->learn_target = -1;
     g->mouse_note = -1;
+    g->drag_fx = -1;
     for (int i = 0; i < 64; i++) g->key_note[i] = -1;
     snprintf(g->preset_name, sizeof g->preset_name, "Inicial");
     if (opt) g->tab = opt->start_tab;
@@ -1114,24 +1464,12 @@ int gui_run(Engine *e, const GuiOptions *opt)
         snprintf(g->preset_name, sizeof g->preset_name, "%s", factory_preset_name(opt->start_preset));
     }
 
-    SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT | FLAG_VSYNC_HINT);
-    InitWindow(opt && opt->width ? opt->width : W, opt && opt->height ? opt->height : H, "Sintetizador");
+    SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT | FLAG_VSYNC_HINT | FLAG_WINDOW_HIGHDPI);
+    InitWindow(opt && opt->width ? opt->width : UI_W, opt && opt->height ? opt->height : UI_H, "Sintetizador");
     SetWindowMinSize(640, 400);
     SetExitKey(KEY_NULL); /* Esc não fecha sem querer */
     SetTargetFPS(60);
-    GuiLoadStyleDark();
-    g_font = GuiGetFont();
-    g_text = GuiGetStyle(DEFAULT, TEXT_SIZE);
-    GuiSetStyle(DEFAULT, TEXT_SPACING, 1);
-    C_BG     = GetColor((unsigned)GuiGetStyle(DEFAULT, BACKGROUND_COLOR));
-    C_LINE   = GetColor((unsigned)GuiGetStyle(DEFAULT, LINE_COLOR));
-    C_TEXT   = GetColor((unsigned)GuiGetStyle(DEFAULT, TEXT_COLOR_NORMAL));
-    C_DIM    = Fade(C_TEXT, 0.6f);
-    C_ACCENT = (Color){240, 150, 60, 255}; /* laranja de destaque */
-    C_PANEL  = GetColor((unsigned)GuiGetStyle(DEFAULT, BASE_COLOR_NORMAL));
-
-    RenderTexture2D canvas = LoadRenderTexture(W, H);
-    SetTextureFilter(canvas.texture, TEXTURE_FILTER_BILINEAR);
+    ui_init();
 
     build_device_lists(g);
     build_preset_list(g);
@@ -1142,53 +1480,42 @@ int gui_run(Engine *e, const GuiOptions *opt)
 
     int frame = 0;
     while (!WindowShouldClose()) {
-        /* escala a tela virtual para o tamanho da janela */
-        float sw = (float)GetScreenWidth(), sh = (float)GetScreenHeight();
-        float scale = fminf(sw / W, sh / H);
-        float ox = (sw - W * scale) / 2, oy = (sh - H * scale) / 2;
-        SetMouseOffset((int)-ox, (int)-oy);
-        SetMouseScale(1 / scale, 1 / scale);
-
-        /* troca de modo de entrada: reabre o áudio e o MIDI */
         int mode = param_geti(P_INPUT_MODE);
         if (mode != g->last_mode) {
             g->last_mode = mode;
             apply_audio(g);
             apply_midi(g);
-            static const char *names[] = {"Entrada: teclado do computador / piano",
-                                          "Entrada: MIDI", "Entrada: guitarra / microfone"};
+            static const char *names[] = {"Entrada: teclado do computador / piano", "Entrada: MIDI", "Entrada: guitarra / microfone"};
             if (!g->audio_error[0]) set_status(g, names[mode]);
         }
-        /* saída MIDI ligada/desligada */
         int msrc = param_geti(P_MOUT_SRC);
         if ((msrc != 0) != (g->mout_last_src != 0)) apply_midi_out(g);
         g->mout_last_src = msrc;
-
-        /* MIDI learn: chegou um CC novo? */
-        if (g->learn && g->learn_target >= 0) {
+        if (ui_learn() && ui_learn_target() >= 0) {
             int cnt, cc = midi_last_cc(&cnt);
             if (cnt != g->learn_seen && cc >= 0) {
-                midi_map(cc, g->learn_target);
+                midi_map(cc, ui_learn_target());
                 midi_map_save("midi-learn.txt");
                 char m[160];
-                snprintf(m, sizeof m, "MIDI learn: CC%d -> %s", cc, param_def(g->learn_target)->label);
+                snprintf(m, sizeof m, "MIDI learn: CC%d -> %s", cc, param_def(ui_learn_target())->label);
                 set_status(g, m);
-                g->learn_target = -1;
+                ui_set_learn_target(-1);
+                g->learn_seen = cnt;
             }
         }
         if (recorder_active(&g->rec)) drain_recording(g);
         handle_keyboard(g);
+        if (IsKeyPressed(KEY_F1)) ToggleFullscreen();
 
-        BeginTextureMode(canvas);
-        ClearBackground(C_BG);
-        g->ndd = 0;
-        bool dd_open = any_dropdown_open(g);
-        if (dd_open) GuiLock();
+        /* janelas por cima bloqueiam o resto */
+        if (g->audio_open) ui_set_modal(true, audio_rect());
+        else if (g->save_open) ui_set_modal(true, save_rect());
+        else ui_set_modal(false, (Rectangle){0});
 
+        ui_begin_frame(C_BG);
         draw_top_bar(g);
         draw_input_panel(g);
-        GuiToggleGroup((Rectangle){346, 50, 152, 30}, "#124#Som;#123#Efeitos;#174#Modulação;#139#Arp/Harmonia;#77#Looper;#122#Saída MIDI", &g->tab);
-        GuiPanel((Rectangle){346, 84, 926, 436}, NULL);
+        draw_tabs(g);
         switch (g->tab) {
         case 0: tab_sound(g); break;
         case 1: tab_effects(g); break;
@@ -1197,51 +1524,20 @@ int gui_run(Engine *e, const GuiOptions *opt)
         case 4: tab_looper(g); break;
         case 5: tab_midi_out(g); break;
         }
-        draw_scope(g, (Rectangle){8, 528, 1264, 66});
-        draw_piano(g, (Rectangle){8, 610, 1264, 160});
+        draw_scope(g, (Rectangle){12, 572, 1256, 46});
+        draw_piano(g, (Rectangle){12, 634, 1256, 130});
+        draw_status_bar(g);
+        if (g->save_open) draw_save_popup(g);
+        if (g->audio_open) draw_audio_dialog(g);
+        ui_end_frame();
 
-        const char *st = g->status;
-        char def[400];
-        if (GetTime() - g->status_time > 8 || !st[0]) {
-            snprintf(def, sizeof def, "Entrada: %s   |   Saída: %.50s   |   %s",
-                     mode == 0 ? "teclado/piano" : (mode == 1 ? (midi_is_open() ? midi_open_name() : "MIDI (nenhum)") : g->e->cap_name),
-                     g->e->dev_ok ? g->e->dev_name : "desligada", g->learn ? "MIDI LEARN ATIVO" : "F1: tela cheia");
-            st = def;
-        }
-        GuiStatusBar((Rectangle){0, H - 26, W, 26}, st);
-
-        /* listas suspensas por último, por cima de tudo */
-        GuiUnlock();
-        for (int i = g->ndd - 1; i >= 0; i--) {
-            Dropdown *d = &g->dd[i];
-            if (dd_open && !*d->edit) GuiLock();
-            int before = *d->active;
-            if (GuiDropdownBox(d->r, d->items, d->active, *d->edit)) {
-                *d->edit = !*d->edit;
-                if (!*d->edit) handle_dropdown_changes(g, d->id, before);
-            }
-            GuiUnlock();
-        }
-        EndTextureMode();
-
-        BeginDrawing();
-        ClearBackground(BLACK);
-        DrawTexturePro(canvas.texture, (Rectangle){0, 0, W, -H}, (Rectangle){ox, oy, W * scale, H * scale}, (Vector2){0, 0}, 0, WHITE);
-        EndDrawing();
-
-        if (IsKeyPressed(KEY_F1)) ToggleFullscreen();
         frame++;
-        if (opt && opt->screenshot && frame == opt->screenshot_frame) {
-            Image img = LoadImageFromTexture(canvas.texture);
-            ImageFlipVertical(&img);
-            ExportImage(img, opt->screenshot);
-            UnloadImage(img);
-        }
+        if (opt && opt->screenshot && frame == opt->screenshot_frame) ui_screenshot(opt->screenshot);
         if (opt && opt->exit_frame && frame >= opt->exit_frame) break;
     }
 
     if (recorder_active(&g->rec)) toggle_recording(g);
-    UnloadRenderTexture(canvas);
+    ui_shutdown();
     CloseWindow();
     return 0;
 }

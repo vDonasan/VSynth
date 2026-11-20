@@ -89,6 +89,10 @@ bool  ui_pressed(Rectangle r);            /* apertou o botão em cima */
 bool  ui_blocked(void);                   /* uma lista/janela está aberta por cima */
 bool  ui_typing(void);                    /* um campo de texto está com o foco */
 void  ui_tooltip(Rectangle r, const char *text); /* dica ao parar o mouse em cima */
+/* Janela modal: enquanto ligada, só a área `r` recebe o mouse.
+   Chame no começo do quadro, antes de desenhar o resto. */
+void  ui_set_modal(bool on, Rectangle r);
+bool  ui_pressed_outside(Rectangle r);    /* clicou fora (para fechar popups) */
 
 /* ---------- controles ---------- */
 bool ui_button(Rectangle r, const char *text, UiButtonStyle style);
@@ -102,6 +106,7 @@ bool ui_pills(Rectangle r, int cols, float rowh, const char *items, int *active,
 bool ui_dropdown(Rectangle r, const char *items, int *active, int id);
 /* Campo de texto de uma linha. Devolve true ao apertar Enter. */
 bool ui_textbox(Rectangle r, char *buf, int cap, int id, const char *placeholder);
+void ui_focus(int id); /* dá o foco a um campo de texto (0 = nenhum) */
 /* Medidor segmentado: nível 0..1, onde começa o amarelo e o vermelho. */
 void ui_meter(Rectangle r, int segments, float level, float warn, float red);
 

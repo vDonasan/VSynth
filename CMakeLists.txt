@@ -2,8 +2,8 @@ cmake_minimum_required(VERSION 3.16)
 project(sintetizador C)
 
 # Baixa as dependências automaticamente na primeira configuração:
-#   raylib (janela/gráficos), raygui (botões/sliders),
-#   miniaudio (áudio de entrada e saída), PortMidi (MIDI).
+#   raylib (janela/gráficos), miniaudio (áudio de entrada e saída),
+#   PortMidi (MIDI). Os botões/knobs são desenhados em src/ui.c.
 option(SYNTH_MIDI "Compilar com suporte a MIDI (PortMidi)" ON)
 
 set(CMAKE_C_STANDARD 11)
@@ -23,14 +23,10 @@ set(SUPPORT_MODULE_RAUDIO OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(raylib
   GIT_REPOSITORY https://github.com/raysan5/raylib.git
   GIT_TAG 5.5 GIT_SHALLOW TRUE)
-FetchContent_Declare(raygui
-  GIT_REPOSITORY https://github.com/raysan5/raygui.git
-  GIT_TAG 4.0 GIT_SHALLOW TRUE)
 FetchContent_Declare(miniaudio
   GIT_REPOSITORY https://github.com/mackron/miniaudio.git
   GIT_TAG 0.11.22 GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(raylib)
-FetchContent_Populate(raygui)     # só o cabeçalho
 FetchContent_Populate(miniaudio)  # só o cabeçalho
 
 set(CORE_SOURCES
@@ -60,9 +56,6 @@ foreach(f Regular SemiBold Bold)
 endforeach()
 
 add_executable(synth src/main.c src/gui.c src/ui.c src/midi.c ${FONT_SOURCES})
-target_include_directories(synth PRIVATE ${raygui_SOURCE_DIR}/src ${raygui_SOURCE_DIR}/styles)
-# raygui é só cabeçalho e gera avisos inofensivos
-set_source_files_properties(src/gui.c PROPERTIES COMPILE_OPTIONS "$<$<NOT:$<C_COMPILER_ID:MSVC>>:-Wno-unused-parameter -Wno-unused-result>")
 target_link_libraries(synth PRIVATE synthcore raylib)
 
 if(SYNTH_MIDI)
