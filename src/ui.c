@@ -136,7 +136,9 @@ void ui_begin_frame(Color clear)
 {
     float sw = (float)GetScreenWidth(), sh = (float)GetScreenHeight();
     U.scale = fminf(sw / UI_W, sh / UI_H);
-    int rs = (int)ceilf(U.scale * GetWindowScaleDPI().x - 0.05f);
+    /* pixels de verdade por ponto da janela (2 na tela Retina, 1 no resto) */
+    float px = GetScreenWidth() > 0 ? (float)GetRenderWidth() / GetScreenWidth() : 1.0f;
+    int rs = (int)ceilf(U.scale * px - 0.05f);
     if (rs < 1) rs = 1;
     if (rs > 3) rs = 3;
     if (rs != U.rs) { /* mudou a escala: refaz a tela interna e as fontes */

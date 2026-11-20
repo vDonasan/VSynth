@@ -1917,8 +1917,34 @@ int gui_run(Engine *e, const GuiOptions *opt)
     for (int i = 0; i < 64; i++) g->key_note[i] = -1;
     snprintf(g->preset_name, sizeof g->preset_name, "Inicial");
 
-    SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT | FLAG_VSYNC_HINT | FLAG_WINDOW_HIGHDPI);
-    InitWindow(opt && opt->width ? opt->width : UI_W, opt && opt->height ? opt->height : UI_H, "Virtual Synth");
+    /* Alta resolução (Retina) só no macOS. No Windows, com a escala da tela
+       acima de 100%, o raylib desenha em pontos e entrega o mouse em pixels:
+       os cliques caem no lugar errado. Fora do Mac tudo fica em pixels e a
+       janela é aumentada aqui mesmo, de acordo com a escala da tela. */
+    unsigned flags = FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT | FLAG_VSYNC_HINT;
+#ifdef __APPLE__
+    flags |= FLAG_WINDOW_HIGHDPI;
+#endif
+    SetConfigFlags(flags);
+    int win_w = opt && opt->width ? opt->width : UI_W, win_h = opt && opt->height ? opt->height : UI_H;
+    InitWindow(win_w, win_h, "Virtual Synth");
+#ifndef __APPLE__
+    if (!(opt && (opt->width || opt->screenshot))) {
+        float dpi = GetWindowScaleDPI().x;
+        int mon = GetCurrentMonitor();
+        int mw = GetMonitorWidth(mon), mh = GetMonitorHeight(mon);
+        if (dpi > 1.05f && mw > 0 && mh > 0) {
+            /* do tamanho da escala, mas cabendo na tela (barra de tarefas e bordas) */
+            float k = fminf(dpi, fminf(mw * 0.92f / UI_W, mh * 0.85f / UI_H));
+            if (k > 1.0f) {
+                win_w = (int)(UI_W * k);
+                win_h = (int)(UI_H * k);
+                SetWindowSize(win_w, win_h);
+                SetWindowPosition((mw - win_w) / 2, (mh - win_h) / 2);
+            }
+        }
+    }
+#endif
     SetWindowMinSize(640, 400);
     SetExitKey(KEY_NULL); /* Esc não fecha sem querer */
     SetTargetFPS(60);
