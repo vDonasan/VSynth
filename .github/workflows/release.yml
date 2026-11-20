@@ -21,7 +21,7 @@ jobs:
   linux:
     runs-on: ubuntu-22.04 # glibc mais antiga: o binário roda em mais distribuições
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Dependências
         run: |
           sudo apt-get update
@@ -41,7 +41,7 @@ jobs:
           cp LICENSE VirtualSynth-Linux/
           cp packaging/LEIA-ME-Linux.txt VirtualSynth-Linux/LEIA-ME.txt
           tar czf VirtualSynth-Linux.tar.gz VirtualSynth-Linux
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: VirtualSynth-Linux
           path: VirtualSynth-Linux.tar.gz
@@ -50,7 +50,7 @@ jobs:
     # Compilação cruzada com MinGW-w64 (o .exe sai sem DLLs extras), com ASIO
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Dependências
         run: |
           sudo apt-get update
@@ -71,7 +71,7 @@ jobs:
           cp LICENSE VirtualSynth-Windows/LICENSE.txt
           cp packaging/LEIA-ME-Windows.txt VirtualSynth-Windows/LEIA-ME.txt
           zip -r VirtualSynth-Windows.zip VirtualSynth-Windows
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: VirtualSynth-Windows
           path: VirtualSynth-Windows.zip
@@ -84,7 +84,7 @@ jobs:
       run:
         shell: msys2 {0}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
@@ -96,9 +96,9 @@ jobs:
           ./build/test_dsp.exe && ./build/test_midi_out.exe
 
   macos:
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Compilar (Apple Silicon e Intel no mesmo app)
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
@@ -120,7 +120,7 @@ jobs:
           cp LICENSE VirtualSynth-macOS/
           cp packaging/LEIA-ME-macOS.txt VirtualSynth-macOS/LEIA-ME.txt
           ditto -c -k --keepParent VirtualSynth-macOS VirtualSynth-macOS.zip
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: VirtualSynth-macOS
           path: VirtualSynth-macOS.zip
@@ -130,7 +130,7 @@ jobs:
     needs: [linux, windows, windows-tests, macos]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           merge-multiple: true
       - name: Publicar a Release

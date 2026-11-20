@@ -716,15 +716,16 @@ static void test_presets(void)
     factory_preset_apply(1);
     float cut = param_get(P_CUTOFF), drive = param_get(P_DIST_DRIVE);
     param_set(P_MASTER, 0.33f); /* não faz parte do preset */
-    CHECK(preset_save("/tmp/teste_preset.txt", 2) == 0, "não salvou");
+    CHECK(preset_save("teste_preset.txt", 2) == 0, "não salvou");
     params_init();
     param_set(P_MASTER, 0.66f);
-    CHECK(preset_load("/tmp/teste_preset.txt") == 0, "não carregou");
+    CHECK(preset_load("teste_preset.txt") == 0, "não carregou");
     printf("  corte %.0f/%.0f, drive %.0f/%.0f, volume geral preservado %.2f\n",
            param_get(P_CUTOFF), cut, param_get(P_DIST_DRIVE), drive, param_get(P_MASTER));
     CHECK(fabsf(param_get(P_CUTOFF) - cut) < 0.5f && param_get(P_DIST_DRIVE) == drive, "valores diferentes");
     CHECK(fabsf(param_get(P_MASTER) - 0.66f) < 1e-6f, "preset não deveria mudar o volume geral");
     params_init();
+    remove("teste_preset.txt");
 }
 
 /* Toca o motor completo (sem placa de som) e grava demo.wav */
