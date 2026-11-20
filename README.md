@@ -1,4 +1,8 @@
-# Sintetizador em C
+# Virtual Synth
+
+Sintetizador em C.
+
+![Tela principal, aba Efeitos](docs/efeitos.png)
 
 Sintetizador com interface gráfica que você toca pelo **teclado do computador**,
 pelo **piano na tela**, por um **teclado/controlador MIDI** ou por uma
@@ -15,14 +19,20 @@ pelo **piano na tela**, por um **teclado/controlador MIDI** ou por uma
 - **Guitarra → MIDI:** as notas detectadas saem como MIDI (com pitch bend) para
   Reaper, Ableton, FL Studio etc. A guitarra passa a tocar qualquer instrumento virtual
 - **Looper:** grava, repete, grava por cima e desfaz (até 60 s), com metrônomo
-- **Mais:** presets (7 de fábrica + os seus), gravação em WAV, afinador,
-  osciloscópio, MIDI learn, pedal de sustain, tap tempo e tela cheia (F1)
+- **Presets:** 21 de fábrica em 8 categorias (Lead, Pad, Baixo, Teclas, Pluck,
+  Arpejo, Guitarra) mais os seus, com navegador e busca
+- **Mais:** gravação em WAV, afinador, osciloscópio, MIDI learn, pedal de
+  sustain, tap tempo, tela cheia (F1), dicas em todos os controles e as
+  configurações lembradas entre uma sessão e outra
+- **Pouco atraso:** detecção da guitarra em 12–17 ms, buffer ajustável, modo
+  exclusivo (WASAPI), drivers ASIO no Windows e um medidor de latência real
 
 ## Compilar
 
 O projeto usa CMake. Na primeira compilação ele **baixa sozinho** o raylib
-(janela), o raygui (botões), o miniaudio (áudio) e o PortMidi (MIDI); é
-preciso estar conectado à internet.
+(janela), o miniaudio (áudio) e o PortMidi (MIDI) e, no Windows, também o
+PortAudio e o SDK ASIO. É preciso estar conectado à internet. A fonte Inter já
+vem no repositório e fica embutida no executável.
 
 ### Linux (Ubuntu/Debian)
 ```sh
@@ -74,7 +84,7 @@ espelho `jcelerier/asio-2`); para usar o ZIP oficial já extraído:
 |---|---|
 | **Teclado** | Toque nas duas fileiras de letras (o desenho mostra quais são as teclas). Setas ←/→ mudam a oitava, **Espaço** é o pedal de sustain. O teclado do computador e o piano funcionam em qualquer modo. |
 | **MIDI** | Escolha o dispositivo na lista. Se você o ligou com o programa aberto, clique em **Atualizar**. Pitch bend, roda de modulação e pedal já funcionam. |
-| **Guitarra** | Escolha a entrada de áudio (de preferência uma interface de áudio) e o canal. Observe o medidor de **Nível**: ajuste o **Gate** (traço laranja) para ficar um pouco acima do nível das cordas paradas. |
+| **Guitarra** | Escolha a entrada de áudio (de preferência uma interface de áudio) e o canal. Clique em **Calibrar gate** e deixe as cordas abafadas por 3 segundos: o gate (traço laranja) fica logo acima do ruído. Também dá para ajustar o knob **Gate** à mão. |
 
 Painel da guitarra:
 - **Mistura:** mistura o som limpo da guitarra com o synth. "Só synth" deixa só o sintetizador.
@@ -86,15 +96,30 @@ Dicas para a guitarra: toque **uma nota por vez** (a detecção é monofônica),
 abafe as outras cordas e prefira o captador do braço. Uma palhetada nova
 reinicia a nota; hammer-on e slide deslizam até a nota seguinte.
 
-Atraso entre a palhetada e o som (medido nos testes):
+Atraso entre a palhetada e o som, só da detecção (medido nos testes):
 
-| Notas | Antes | Agora |
+| Notas | Primeira versão | Agora |
 |---|---|---|
-| Cordas Mi, Lá e Ré soltas (graves) | 33–39 ms | 28–31 ms |
-| Da corda Sol para cima | 28–39 ms | 17–20 ms |
+| Ré do drop-D | 33–39 ms | 28 ms |
+| Cordas Mi, Lá e Ré soltas (graves) | 33–39 ms | 17 ms |
+| Da corda Sol para cima | 28–39 ms | 12 ms |
 
-As notas a partir de 180 Hz usam uma janela de análise curta (16 ms); as
-graves precisam da longa (27 ms), porque um ciclo do Mi grave já dura 12 ms.
+O detector usa três janelas de análise: curta (11 ms) para as notas a partir
+de 180 Hz, média (17 ms) para os graves e longa (27 ms) só para o Ré do
+drop-D. Quando a leitura é muito confiável, a nota sai sem esperar a segunda
+análise. A isso se soma o atraso da placa de som (veja abaixo).
+
+#### Diminuir o atraso da placa de som
+
+Na **engrenagem** da barra de cima (Configurações de áudio):
+- **Tamanho do buffer:** 64 ou 128 amostras dão menos atraso. Se aparecerem
+  estalos, aumente.
+- **Modo exclusivo (Windows):** o programa usa a placa sozinho (WASAPI).
+- **ASIO (Windows):** com uma interface de áudio, escolha a saída `ASIO: ...`.
+  Costuma ser o caminho de menor atraso.
+- **Medir a latência real:** ligue um cabo da saída na entrada da interface
+  (ou encoste o microfone no alto-falante) e clique em **Medir**. O programa
+  toca 5 cliques, ouve cada um voltar e mostra a mediana do tempo de ida e volta.
 
 ### 2. Ajuste o som (abas)
 
@@ -123,21 +148,36 @@ graves precisam da longa (27 ms), porque um ciclo do Mi grave já dura 12 ms.
 
 ### 3. Barra de cima
 
-- **Preset:** escolha na lista. Para salvar, clique na caixa de nome, digite e
-  aperte Enter ou "Salvar" (vai para a pasta `presets/`). Os seus aparecem com `*`.
-  Presets não mudam a entrada, o gate nem o volume geral.
+- **Preset:** as setas ‹ › passam de um preset para o outro. Clique no nome
+  para abrir o **navegador**: categorias à esquerda, busca por nome ou som
+  ("delay", "vibrato"...), clique para ouvir e duplo clique ou Enter para
+  fechar. As setas ↑ ↓ do teclado também trocam de preset.
+- **Salvar:** dê um nome, escolha a categoria e aperte Enter. O preset vai para
+  a pasta `presets/` e aparece no navegador. Presets não mudam a entrada, o
+  gate nem o volume geral.
 - **MIDI Learn:** ligue, clique num controle (fica com contorno laranja) e gire
   um knob do seu controlador; pronto, ele passa a controlar aquele item.
   Botão direito desfaz. O mapa fica salvo em `midi-learn.txt`.
 - **Gravar WAV:** grava tudo o que sai (sem o metrônomo) em `gravacoes/`.
 - **Pânico:** silencia todas as notas e para o looper.
 
+Pare o mouse em cima de qualquer controle para ver o que ele faz. O programa
+lembra a entrada, os dispositivos, o buffer, o preset e todos os ajustes em
+`configuracoes.ini`.
+
+| | |
+|---|---|
+| ![Navegador de presets](docs/presets.png) | ![Aba Som](docs/som.png) |
+| ![Arpejador e harmonizador](docs/arp-harmonia.png) | ![Looper](docs/looper.png) |
+
 ## Organização do código
 
 ```
 src/
   main.c        início do programa e opções de linha de comando
-  gui.c         interface (raylib + raygui)
+  gui.c         telas, janelas e configurações lembradas
+  ui.c          widgets desenhados à mão (knobs, botões, listas, dicas)
+  audio_asio.c  drivers ASIO no Windows (PortAudio + SDK ASIO)
   engine.c      motor de áudio: caminho das notas (oitava -> harmonizador ->
                 arpejador -> synth/saída MIDI), mixagem, metrônomo, dispositivos
   params.c      tabela de todos os parâmetros, presets
@@ -163,14 +203,15 @@ Regras que mantêm o som sem estalos:
   até 9x mais lenta) são tratados como zero (FTZ/DAZ).
 - Interface, MIDI e guitarra conversam com ele por **filas sem trava**
   (`queue.h`) e por **parâmetros atômicos** (`params.c`).
-- A análise da guitarra (YIN, ~6% de um núcleo) roda numa thread própria; o
+- A análise da guitarra (YIN, ~4% de um núcleo) roda numa thread própria; o
   callback só copia as amostras.
 
 Para criar um novo parâmetro:
 1. Acrescente o nome em `params.h`.
 2. Descreva-o em `params.c`.
 3. Leia o valor com `param_get()` no ponto do áudio que deve usá-lo.
-4. Desenhe o controle com `pcontrol()` em `gui.c`.
+4. Escreva a dica dele na tabela `HELP` de `params.c`.
+5. Desenhe o controle com `ui_knob()` ou `ui_param_switch()` em `gui.c`.
 
 Com isso ele já funciona automaticamente com presets e MIDI learn.
 
@@ -189,6 +230,7 @@ Os testes:
 - testam o harmonizador (incluindo bends) e a sequência enviada para a DAW;
 - medem a suavização dos knobs e o ganho da proteção contra denormais;
 - salvam e carregam presets;
+- medem a latência com um "cabo" simulado da saída na entrada;
 - geram `demo.wav` com o motor completo.
 
 Para testar a interface sem placa de som: `./build/synth --null-audio`.
