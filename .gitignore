@@ -1,0 +1,5 @@
+build/
+build-*/
+gravacoes/
+midi-learn.txt
+demo.wav
