@@ -17,8 +17,12 @@ on:
 permissions:
   contents: write # necessário para criar a Release
 
+env:
+  DEBIAN_FRONTEND: noninteractive
+
 jobs:
   linux:
+    timeout-minutes: 30
     runs-on: ubuntu-22.04 # glibc mais antiga: o binário roda em mais distribuições
     steps:
       - uses: actions/checkout@v5
@@ -47,6 +51,7 @@ jobs:
           path: VirtualSynth-Linux.tar.gz
 
   windows:
+    timeout-minutes: 30
     # Compilação cruzada com MinGW-w64 (o .exe sai sem DLLs extras), com ASIO
     runs-on: ubuntu-24.04
     steps:
@@ -54,7 +59,7 @@ jobs:
       - name: Dependências
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake mingw-w64 zip
+          sudo apt-get install -y --no-install-recommends cmake g++-mingw-w64-x86-64-posix gcc-mingw-w64-x86-64-posix binutils-mingw-w64-x86-64 mingw-w64-x86-64-dev zip
       - name: Compilar
         run: |
           cmake -B build-win -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-w64.cmake -DCMAKE_BUILD_TYPE=Release
@@ -77,6 +82,7 @@ jobs:
           path: VirtualSynth-Windows.zip
 
   windows-tests:
+    timeout-minutes: 30
     # Os testes rodam num Windows de verdade
     needs: windows
     runs-on: windows-latest
@@ -96,6 +102,7 @@ jobs:
           ./build/test_dsp.exe && ./build/test_midi_out.exe
 
   macos:
+    timeout-minutes: 30
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
@@ -126,6 +133,7 @@ jobs:
           path: VirtualSynth-macOS.zip
 
   release:
+    timeout-minutes: 30
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [linux, windows, windows-tests, macos]
     runs-on: ubuntu-latest
