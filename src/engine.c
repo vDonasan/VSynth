@@ -390,8 +390,6 @@ void engine_process(Engine *e, const float *in, int in_channels, float *out, int
     if (gtr) {
         int n = frames < 4096 ? frames : 4096;
         for (int i = 0; i < n; i++) e->gtr_in[i] = in[i * in_channels + ch];
-        guitar_push(&e->guitar, e->gtr_in, n);
-        e->synth.input_level = atomic_load(&e->guitar.level);
     } else {
         e->synth.input_level = 0;
     }
@@ -409,6 +407,14 @@ void engine_process(Engine *e, const float *in, int in_channels, float *out, int
         const float synth_gain = gtr ? fminf(1.0f, 2.0f * (1.0f - blend)) : 1.0f;
         const float gtr_gain   = gtr ? fminf(1.0f, 2.0f * blend) : 0.0f;
         const float loop_vol   = param_s(P_LOOP_VOL);
+        /* guitarra: analisa este pedaço da entrada e, se uma nota foi
+           reconhecida, ela já começa neste mesmo pedaço da saída */
+        if (gtr && done < 4096) {
+            int m = done + n <= 4096 ? n : 4096 - done;
+            if (guitar_feed(&e->guitar, e->gtr_in + done, m))
+                while (evq_pop(&e->q_gtr, &ev)) route(e, ev, arp_on);
+            e->synth.input_level = atomic_load_explicit(&e->guitar.level, memory_order_relaxed);
+        }
         if (arp_on) arp_process(&e->arp, sink_to_synth, e, n, e->sr, bpm);
         synth_render(&e->synth, e->mono, n);
         for (int i = 0; i < n; i++) {

@@ -657,7 +657,6 @@ static void render_demo(void)
     param_set(P_INPUT_MODE, 2);
     for (int p = 0; p + PITCH_HOP <= glen && pos + PITCH_HOP <= total; p += PITCH_HOP, pos += PITCH_HOP) {
         memcpy(in, gtr + p, sizeof in);
-        guitar_process_hop(&e.guitar, in); /* no app isto roda na thread do detector */
         engine_process(&e, in, 1, out + 2 * pos, PITCH_HOP);
     }
     RUN(1.0);

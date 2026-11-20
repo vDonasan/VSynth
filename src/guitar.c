@@ -1,17 +1,25 @@
 #include "guitar.h"
 
 #include <math.h>
-#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "params.h"
 
-#include "platform.h"
+#define LEVEL_HOPS (PITCH_LEVEL_WIN / PITCH_HOP > 0 ? PITCH_LEVEL_WIN / PITCH_HOP : 1)
 
-void guitar_push(Guitar *g, const float *mono, int frames)
+int guitar_feed(Guitar *g, const float *mono, int frames)
 {
-    for (int i = 0; i < frames; i++) fring_push(&g->ring, mono[i]);
+    int done = 0;
+    for (int i = 0; i < frames; i++) {
+        g->hop_buf[g->hop_fill++] = mono[i];
+        if (g->hop_fill == PITCH_HOP) {
+            guitar_process_hop(g, g->hop_buf);
+            g->hop_fill = 0;
+            done++;
+        }
+    }
+    return done;
 }
 
 void guitar_process_hop(Guitar *g, const float *hop)
@@ -21,9 +29,8 @@ void guitar_process_hop(Guitar *g, const float *hop)
     g->tracker.on_db  = gate;
     g->tracker.off_db = gate - GATE_HYSTERESIS_DB;
 
-    /* desliza a janela e acrescenta as amostras novas, já filtradas */
-    memmove(g->window, g->window + PITCH_HOP, (PITCH_WINDOW - PITCH_HOP) * sizeof(float));
-    float *dst = g->window + PITCH_WINDOW - PITCH_HOP;
+    /* acrescenta as amostras novas, já filtradas, logo depois da janela */
+    float *dst = g->window + PITCH_WINDOW;
     float energy = 0.0f;
     for (int i = 0; i < PITCH_HOP; i++) {
         float x = hop[i] * gain;
@@ -34,7 +41,20 @@ void guitar_process_hop(Guitar *g, const float *hop)
         dst[i] = g->lp_y1;
         energy += y * y;
     }
-    float db = 20.0f * log10f(sqrtf(energy / PITCH_HOP) + 1e-9f);
+    /* volume nas últimas PITCH_LEVEL_WIN amostras (os passos curtos
+       demais oscilariam dentro de um ciclo de uma corda grave) */
+    g->hop_energy[g->energy_pos] = energy;
+    g->energy_pos = (g->energy_pos + 1) % LEVEL_HOPS;
+    float esum = 0.0f;
+    for (int i = 0; i < LEVEL_HOPS; i++) esum += g->hop_energy[i];
+    float db = 20.0f * log10f(sqrtf(esum / (LEVEL_HOPS * PITCH_HOP)) + 1e-9f);
+
+    /* Atualiza as três análises só com o que entrou e saiu da janela
+       (custo pequeno e igual em todo passo) e depois anda a janela. */
+    yin_slide(&g->yin_short, g->window + PITCH_WINDOW - PITCH_SHORT_WINDOW, PITCH_HOP);
+    yin_slide(&g->yin_mid, g->window + PITCH_WINDOW - PITCH_MID_WINDOW, PITCH_HOP);
+    yin_slide(&g->yin, g->window, PITCH_HOP);
+    memmove(g->window, g->window + PITCH_HOP, PITCH_WINDOW * sizeof(float));
 
     float hz = -1.0f;
     if (db > g->tracker.off_db) {
@@ -44,14 +64,14 @@ void guitar_process_hop(Guitar *g, const float *hop)
            janela menor não inventa erros de oitava que a longa não teria. */
         float conf = 0.0f;
         Yin *used = &g->yin_short;
-        float hs = yin_detect(&g->yin_short, g->window + PITCH_WINDOW - PITCH_SHORT_WINDOW, &conf);
+        float hs = yin_eval(&g->yin_short, &conf);
         float cm = 0;
         if (hs >= PITCH_SHORT_MIN_HZ && conf > 0.85f) hz = hs;
-        else if ((hz = yin_detect(&g->yin_mid, g->window + PITCH_WINDOW - PITCH_MID_WINDOW, &cm)) > 0 && cm > 0.85f) {
+        else if ((hz = yin_eval(&g->yin_mid, &cm)) > 0 && cm > 0.85f) {
             used = &g->yin_mid; /* janela média: cordas graves sem esperar a longa */
             conf = cm;
         }
-        else { hz = yin_detect(&g->yin, g->window, &conf); used = &g->yin; }
+        else { hz = yin_eval(&g->yin, &conf); used = &g->yin; }
         g->tracker.conf = hz > 0 ? conf : 0;
 
         /* Correção de oitava por continuidade: com uma nota soando, uma
@@ -65,7 +85,7 @@ void guitar_process_hop(Guitar *g, const float *hop)
             if (k >= 2 && k <= 4 && fabsf(ratio - k) < 0.03f * k) {
                 float tau = g->sr / (hz / k);
                 if (tau > used->tau_max && used != &g->yin) { /* janela curta não alcança */
-                    yin_detect(&g->yin, g->window, NULL);
+                    yin_eval(&g->yin, NULL);
                     used = &g->yin;
                 }
                 /* Numa oitava de verdade os dois períodos encaixam igualmente
@@ -90,25 +110,20 @@ void guitar_process_hop(Guitar *g, const float *hop)
     atomic_store(&g->st_db, db);
 }
 
-static void *guitar_thread(void *arg)
-{
-    Guitar *g = arg;
-    float hop[PITCH_HOP];
-    while (atomic_load(&g->running)) {
-        if (fring_available(&g->ring) < PITCH_HOP) { sleep_ms(1); continue; }
-        fring_read(&g->ring, hop, PITCH_HOP);
-        guitar_process_hop(g, hop);
-    }
-    return NULL;
-}
-
 void guitar_reset(Guitar *g)
 {
     g->dc_x1 = g->dc_y1 = g->lp_y1 = 0.0f;
     memset(g->window, 0, sizeof g->window);
+    for (int t = 0; t <= g->yin.tau_max; t++) g->yin.acc[t] = 0;
+    for (int t = 0; t <= g->yin_mid.tau_max; t++) g->yin_mid.acc[t] = 0;
+    for (int t = 0; t <= g->yin_short.tau_max; t++) g->yin_short.acc[t] = 0;
+    memset(g->hop_energy, 0, sizeof g->hop_energy);
+    g->energy_pos = 0;
+    g->hop_fill = 0;
     tracker_init(&g->tracker, param_get(P_GTR_GATE), GATE_HYSTERESIS_DB);
     tracker_set_refractory(&g->tracker, 60.0f, g->sr, PITCH_HOP);
-    tracker_set_settle(&g->tracker, PITCH_SETTLE_HOPS);
+    tracker_set_settle(&g->tracker, (int)(PITCH_SETTLE_MS / 1000.0f * g->sr / PITCH_HOP + 0.5f));
+    tracker_set_hop(&g->tracker, PITCH_HOP);
     g->tracker.fast_conf = PITCH_FAST_CONF;
     atomic_store(&g->st_note, -1);
     atomic_store(&g->st_hz, -1.0f);
@@ -123,12 +138,10 @@ int guitar_init(Guitar *g, float sr, EventQueue *q)
     g->q       = q;
     g->sr      = sr;
     g->lp_coef = 1.0f - expf(-2.0f * 3.14159265f * 1600.0f / sr);
-    atomic_init(&g->running, false);
     atomic_init(&g->st_note, -1);
     atomic_init(&g->st_hz, -1.0f);
     atomic_init(&g->st_db, -120.0f);
     atomic_init(&g->level, 0.0f);
-    if (fring_init(&g->ring, 32768) < 0) return -1;
     if (yin_init(&g->yin, sr, PITCH_WINDOW, PITCH_FMIN, PITCH_FMAX, PITCH_THRESHOLD) < 0) return -1;
     if (yin_init(&g->yin_short, sr, PITCH_SHORT_WINDOW, PITCH_SHORT_FMIN, PITCH_FMAX, PITCH_THRESHOLD) < 0) return -1;
     if (yin_init(&g->yin_mid, sr, PITCH_MID_WINDOW, PITCH_MID_FMIN, PITCH_FMAX, PITCH_THRESHOLD) < 0) return -1;
@@ -139,12 +152,7 @@ int guitar_init(Guitar *g, float sr, EventQueue *q)
 int guitar_start(Guitar *g)
 {
     if (g->started) return 0;
-    fring_clear(&g->ring);
     guitar_reset(g);
-    atomic_store(&g->running, true);
-    pthread_t *t = malloc(sizeof *t);
-    if (!t || pthread_create(t, NULL, guitar_thread, g) != 0) { free(t); return -1; }
-    g->thread = t;
     g->started = 1;
     return 0;
 }
@@ -152,10 +160,6 @@ int guitar_start(Guitar *g)
 void guitar_stop(Guitar *g)
 {
     if (!g->started) return;
-    atomic_store(&g->running, false);
-    pthread_join(*(pthread_t *)g->thread, NULL);
-    free(g->thread);
-    g->thread = NULL;
     g->started = 0;
     if (g->tracker.current >= 0) { /* não deixa nota presa */
         Event off = {EV_NOTE_OFF, SRC_AUDIO, (uint8_t)g->tracker.current, 0, 0};
@@ -170,5 +174,4 @@ void guitar_free(Guitar *g)
     yin_free(&g->yin);
     yin_free(&g->yin_short);
     yin_free(&g->yin_mid);
-    fring_free(&g->ring);
 }

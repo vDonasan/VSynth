@@ -15,8 +15,9 @@
 #define PITCH_MID_WINDOW   832      /* janela média: 17 ms, para as cordas graves */
 #define PITCH_MID_FMIN     78.0f    /* (o Ré do drop-D, 73 Hz, fica com a longa) */
 #define PITCH_FAST_CONF    0.92f    /* leitura com confiança acima disso não espera confirmação */
-#define PITCH_SETTLE_HOPS  6        /* análises ignorando a nota antiga após a palhetada */
-#define PITCH_HOP          128      /* nova análise a cada 2,7 ms */
+#define PITCH_SETTLE_MS    16.0f    /* tempo ignorando a nota antiga após a palhetada */
+#define PITCH_HOP          64       /* nova análise a cada 1,3 ms */
+#define PITCH_LEVEL_WIN    128      /* o volume (dB) é medido nas últimas 128 amostras */
 #define PITCH_FMIN         70.0f    /* Hz – cobre afinação drop-D (D2 = 73 Hz) */
 #define PITCH_FMAX         1500.0f  /* Hz */
 #define PITCH_THRESHOLD    0.15f    /* limiar do YIN (menor = mais exigente) */

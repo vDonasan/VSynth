@@ -1785,15 +1785,16 @@ static void draw_audio_dialog(Gui *g)
 
     /* tamanho do buffer */
     ui_text("Tamanho do buffer", x, r.y + 162, 11, UI_REGULAR, C_TEXT2);
-    static const int sizes[4] = {64, 128, 256, 512};
-    int cur = g->e->period_frames > 0 ? g->e->period_frames : FRAMES_PER_BUFFER, sel = 1;
-    for (int i = 0; i < 4; i++) if (sizes[i] == cur) sel = i;
+    static const int sizes[5] = {32, 64, 128, 256, 512};
+    int cur = g->e->period_frames > 0 ? g->e->period_frames : FRAMES_PER_BUFFER, sel = 2;
+    for (int i = 0; i < 5; i++) if (sizes[i] == cur) sel = i;
     ui_tooltip((Rectangle){x, r.y + 180, w, 38}, "Quantas amostras o som processa de cada vez. Menor = menos atraso, mas exige mais do computador.");
-    if (ui_segmented((Rectangle){x, r.y + 180, w, 38}, "64 · 1,3 ms;128 · 2,7 ms;256 · 5,3 ms;512 · 10,7 ms", &sel, C_CYAN, C_CYAN_BG, C_CYAN_HI)) {
+    if (ui_segmented((Rectangle){x, r.y + 180, w, 38}, "32 · 0,7 ms;64 · 1,3 ms;128 · 2,7 ms;256 · 5,3 ms;512 · 10,7 ms", &sel, C_CYAN, C_CYAN_BG, C_CYAN_HI)) {
         g->e->period_frames = sizes[sel];
         apply_audio(g);
         char m[120];
-        snprintf(m, sizeof m, "Buffer de %d amostras. Se ouvir estalos, aumente.", sizes[sel]);
+        if (sizes[sel] == 32) snprintf(m, sizeof m, "Buffer de 32 amostras: o mínimo. Funciona melhor com ASIO; se ouvir estalos, aumente.");
+        else snprintf(m, sizeof m, "Buffer de %d amostras. Se ouvir estalos, aumente.", sizes[sel]);
         set_status(g, m);
     }
     ui_text("Menor = menos atraso. Se aparecerem estalos, use um valor maior.", x, r.y + 226, 12, UI_REGULAR, C_TEXT2);

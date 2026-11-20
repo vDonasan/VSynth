@@ -27,30 +27,67 @@ int yin_init(Yin *y, float sr, int size, float fmin, float fmax, float threshold
     if (y->tau_max >= size / 2 + size / 4) return -1; /* janela curta demais para fmin */
     y->d   = calloc((size_t)y->tau_max + 2, sizeof(float));
     y->raw = calloc((size_t)y->tau_max + 2, sizeof(float));
-    return (y->d && y->raw) ? 0 : -1;
+    y->acc = calloc((size_t)y->tau_max + 2, sizeof(double));
+    return (y->d && y->raw && y->acc) ? 0 : -1;
 }
 
 void yin_free(Yin *y)
 {
     free(y->d);
     free(y->raw);
+    free(y->acc);
     y->d = y->raw = NULL;
+    y->acc = NULL;
 }
 
 float yin_detect(Yin *y, const float *x, float *confidence)
 {
     const int W = y->size - y->tau_max; /* trecho comparado */
-    float *d = y->d;
-    float running = 0.0f;
-
-    /* Passos 2 e 3: função diferença + normalização cumulativa */
-    d[0] = 1.0f;
+    /* Passo 2: função diferença */
     for (int tau = 1; tau <= y->tau_max; tau++) {
         float sum = 0.0f;
         for (int j = 0; j < W; j++) {
             float diff = x[j] - x[j + tau];
             sum += diff * diff;
         }
+        y->acc[tau] = sum;
+    }
+    return yin_eval(y, confidence);
+}
+
+void yin_slide(Yin *y, const float *x, int hop)
+{
+    /* Cada termo (x[j] - x[j+tau])² que entra na janela sai dela, mais
+       tarde, calculado exatamente igual (mesmas amostras, mesma conta em
+       float). Somando direto no acumulador em double, entrada e saída se
+       cancelam e o erro não cresce. O laço interno corre em tau, que o
+       compilador vetoriza. */
+    const int W = y->size - y->tau_max, T = y->tau_max;
+    double *acc = y->acc + 1;
+    for (int j = 0; j < hop; j++) {         /* termos que saem da janela */
+        const float a = x[j], *b = x + j + 1;
+        for (int t = 0; t < T; t++) {
+            float d = a - b[t];
+            acc[t] -= (double)(d * d);
+        }
+    }
+    for (int j = W; j < W + hop; j++) {     /* termos que entram */
+        const float a = x[j], *b = x + j + 1;
+        for (int t = 0; t < T; t++) {
+            float d = a - b[t];
+            acc[t] += (double)(d * d);
+        }
+    }
+}
+
+float yin_eval(Yin *y, float *confidence)
+{
+    float *d = y->d;
+    float running = 0.0f;
+    /* Passo 3: normalização cumulativa */
+    d[0] = 1.0f;
+    for (int tau = 1; tau <= y->tau_max; tau++) {
+        float sum = y->acc[tau] > 0 ? (float)y->acc[tau] : 0.0f;
         running += sum;
         y->raw[tau] = sum;
         d[tau] = running > 0.0f ? sum * (float)tau / running : 1.0f;
@@ -118,6 +155,15 @@ void tracker_init(NoteTracker *t, float on_db, float hysteresis_db)
     t->last_off       = -1;
     t->since_off      = 1000;
     t->rering         = 0;
+    t->hop_scale      = 1;
+    t->hist_pos       = 0;
+    for (int i = 0; i < 8; i++) t->db_hist[i] = -120.0f;
+}
+
+void tracker_set_hop(NoteTracker *t, int hop)
+{
+    int s = 128 / hop;
+    t->hop_scale = s < 1 ? 1 : (s > 7 ? 7 : s);
 }
 
 void tracker_set_refractory(NoteTracker *t, float ms, float sr, int hop)
@@ -143,7 +189,11 @@ static int db_to_velocity(const NoteTracker *t, float db)
 int tracker_process(NoteTracker *t, float hz, float db, Event *out, int max)
 {
     int n = 0;
-    float prev_db = t->last_db;
+    /* volume de 128 amostras atrás: com passos menores, as medições se
+       sobrepõem e o salto da palhetada se espalha por mais de uma */
+    float prev_db = t->db_hist[(t->hist_pos - t->hop_scale + 8) & 7];
+    t->db_hist[t->hist_pos] = db;
+    t->hist_pos = (t->hist_pos + 1) & 7;
     t->last_db = db;
     if (max < 2) return 0;
     if (t->since_on < 1000) t->since_on++;
@@ -213,7 +263,7 @@ int tracker_process(NoteTracker *t, float hz, float db, Event *out, int max)
     if (t->current >= 0 && !t->attack_pending) {
         int jump = note - t->current;
         if (jump == 12 || jump == 19 || jump == 24 || jump == 28 || jump == 31 || jump == -12 || jump == -19 || jump == -24)
-            needed = t->stable_needed * 8;
+            needed = t->stable_needed * 8 * t->hop_scale;
     }
 
     if (t->cand_count >= needed) {
