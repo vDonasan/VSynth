@@ -54,6 +54,9 @@ typedef struct {
     int   last_off, since_off, rering; /* abafou: a mesma nota não volta já */
     float conf;           /* confiança da última análise (0..1) */
     int   since_onset;    /* análises desde o último EV_ONSET */
+    int   external_pick;  /* 1: a palhetada vem de fora (campo pick), não do salto de volume */
+    int   pick;           /* entrada: houve palhetada nesta análise */
+    int   legato_needed;  /* leituras seguidas para trocar de nota sem palhetada */
     int   hop_scale;      /* 128 / tamanho do passo: converte contagens para tempo */
     float db_hist[8];     /* volumes recentes, para achar a palhetada */
     int   hist_pos;

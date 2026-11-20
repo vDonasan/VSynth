@@ -1,4 +1,5 @@
 #include "pitch.h"
+#include "config.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -157,6 +158,9 @@ void tracker_init(NoteTracker *t, float on_db, float hysteresis_db)
     t->rering         = 0;
     t->hop_scale      = 1;
     t->since_onset    = 1000;
+    t->external_pick  = 0;
+    t->pick           = 0;
+    t->legato_needed  = 4;
     t->hist_pos       = 0;
     for (int i = 0; i < 8; i++) t->db_hist[i] = -120.0f;
 }
@@ -165,6 +169,9 @@ void tracker_set_hop(NoteTracker *t, int hop)
 {
     int s = 128 / hop;
     t->hop_scale = s < 1 ? 1 : (s > 7 ? 7 : s);
+    /* 20 ms de leituras iguais para trocar de nota sem palhetada (48 kHz) */
+    t->legato_needed = (int)(PITCH_LEGATO_MS / 1000.0f * 48000.0f / hop + 0.5f);
+    if (t->legato_needed < 2) t->legato_needed = 2;
 }
 
 void tracker_set_refractory(NoteTracker *t, float ms, float sr, int hop)
@@ -219,9 +226,11 @@ int tracker_process(NoteTracker *t, float hz, float db, Event *out, int max)
         t->since_onset = 0;
     }
 
-    /* Salto de volume com nota soando = nova palhetada. A janela de análise
-       ainda contém a nota anterior, então espera a nova altura se firmar. */
-    if (t->current >= 0 && db - prev_db > 9.0f && t->since_on > t->refractory) {
+    /* Palhetada com nota soando: vem do detector de agudos (guitarra) ou,
+       sem ele, de um salto de volume. A janela de análise ainda contém a
+       nota anterior, então espera a nova altura se firmar. */
+    int picked = t->external_pick ? t->pick : db - prev_db > 9.0f;
+    if (t->current >= 0 && picked && t->since_on > t->refractory && t->since_onset > t->refractory) {
         out[n++] = mk(EV_ONSET, 0, db_to_velocity(t, db), 0.0f);
         t->since_onset    = 0;
         t->attack_pending = 1;
@@ -234,11 +243,17 @@ int tracker_process(NoteTracker *t, float hz, float db, Event *out, int max)
     if (t->attack_pending) t->pend_hops++;
 
     int loud_enough = db > t->on_db || (t->current >= 0 && db > t->off_db);
-    if (hz <= 0.0f || !loud_enough) return n; /* ruído da palhetada: mantém o estado */
+    /* sem altura definida (ruído da palhetada, acorde): mantém o estado e
+       zera a confirmação, que só vale para leituras seguidas */
+    if (hz <= 0.0f || !loud_enough) { t->cand_count = 0; t->candidate = -1; return n; }
 
     float midi = hz_to_midi(hz);
     int   note = (int)lroundf(midi);
     if (note < 0 || note > 127) return n;
+    /* Margem: a corda começa um pouco aguda e vai assentando, e a afinação
+       nunca é perfeita. Uma leitura a menos de 0,7 semitom da nota que está
+       soando (ou da última, numa palhetada nova) conta como ela. */
+    if (t->current >= 0 && fabsf(midi - t->current) < 0.7f) note = t->current;
 
     if (note == t->current && !t->attack_pending) {
         out[n++] = mk(EV_PITCH_TRACK, note, 0, midi); /* bends e vibrato */
@@ -270,12 +285,15 @@ int tracker_process(NoteTracker *t, float hz, float db, Event *out, int max)
        12ª, 2 oitavas...) quase sempre é o detector se confundindo com um
        harmônico forte, não o músico. Exige confirmação bem mais longa. */
     int needed = t->stable_needed;
-    if (t->fast_conf > 0 && t->conf >= t->fast_conf) needed = 1; /* leitura muito limpa: aceita já */
     if (t->current >= 0 && !t->attack_pending) {
+        /* Troca sem palhetada (hammer-on, slide... ou um harmônico, outra
+           corda vibrando, uma nota do acorde): só com leituras seguidas da
+           nova nota por ~20 ms. Saltos para um harmônico, bem mais. */
         int jump = note - t->current;
+        needed = t->legato_needed;
         if (jump == 12 || jump == 19 || jump == 24 || jump == 28 || jump == 31 || jump == -12 || jump == -19 || jump == -24)
             needed = t->stable_needed * 8 * t->hop_scale;
-    }
+    } else if (t->fast_conf > 0 && t->conf >= t->fast_conf) needed = 1; /* palhetada, leitura muito limpa */
 
     if (t->cand_count >= needed) {
         /* Com palhetada: solta a anterior e ataca de novo.

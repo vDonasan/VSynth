@@ -133,9 +133,9 @@ contar a placa de som):
 
 | Notas | Primeira versão | Reconhecer a nota | Com **Ataque imediato** |
 |---|---|---|---|
-| Ré do drop-D | 33–39 ms | 25 ms | som em ~1 ms |
-| Cordas Mi, Lá e Ré soltas (graves) | 33–39 ms | 17 ms | som em ~1 ms |
-| Da corda Sol para cima | 28–39 ms | 11 ms | som em ~1 ms |
+| Ré do drop-D | 33–39 ms | 27 ms | som em ~1 ms |
+| Cordas Mi, Lá e Ré soltas (graves) | 33–39 ms | 19 ms | som em ~1 ms |
+| Da corda Sol para cima | 28–39 ms | 12 ms | som em ~1 ms |
 
 **Ataque imediato** (ligado por padrão, no painel da guitarra): o som começa
 assim que a palhetada é detectada, abafado e na altura da nota anterior, e se
@@ -144,6 +144,19 @@ O ouvido percebe o começo do som na palhetada, então a sensação de atraso ca
 muito, principalmente nas cordas graves. Uma batida nas cordas que não vira
 nota some em ~30 ms. Se o "tchic" do começo incomodar num preset, desligue a
 chave. Com o arpejador ligado ele fica desativado.
+
+Para não se confundir com uma guitarra de verdade, o detector:
+- reconhece a **palhetada pelo estalo agudo da palheta** (não por variações de
+  volume, que numa corda grave oscilam o tempo todo), e só se o volume subir;
+- só lê a nota quando a janela de análise inteira já é som depois da
+  palhetada (sem restos da nota anterior ou de cordas soltas vibrando);
+- dá uma margem de 0,7 semitom para a nota que está soando (a corda começa
+  um pouco aguda e assenta);
+- só troca de nota sem palhetada (hammer-on, slide) com leituras seguidas
+  por 20 ms.
+
+**Acordes:** o detector reconhece uma nota por vez. Num acorde ele fica numa
+nota só, sem trocar, mas ela nem sempre é uma nota do acorde.
 
 O detector roda dentro do próprio áudio, a cada 64 amostras (1,3 ms), com
 três janelas de análise: curta (11 ms) para as notas a partir de 180 Hz,
@@ -274,6 +287,9 @@ Os testes:
 - medem a suavização dos knobs e o ganho da proteção contra denormais;
 - salvam e carregam presets;
 - medem a latência com um "cabo" simulado da saída na entrada;
+- tocam uma guitarra simulada "suja" (harmônicos desafinados, cordas
+  vibrando por simpatia, zumbido): notas soltas, a mesma nota palhetada
+  várias vezes, frase rápida, vibrato, hammer-on e acordes;
 - conferem o ataque imediato (som na palhetada, nota certa depois) e que
   batidas nas cordas sem nota não deixam som preso;
 - geram `demo.wav` com o motor completo.

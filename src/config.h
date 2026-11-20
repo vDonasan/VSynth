@@ -17,7 +17,7 @@
 #define PITCH_FAST_CONF    0.92f    /* leitura com confiança acima disso não espera confirmação */
 #define PITCH_SETTLE_MS    16.0f    /* tempo ignorando a nota antiga após a palhetada */
 #define PITCH_HOP          64       /* nova análise a cada 1,3 ms */
-#define PITCH_LEVEL_WIN    128      /* o volume (dB) é medido nas últimas 128 amostras */
+#define PITCH_LEGATO_MS    20.0f    /* troca de nota sem palhetada: leituras iguais por 20 ms */
 #define PITCH_FMIN         70.0f    /* Hz – cobre afinação drop-D (D2 = 73 Hz) */
 #define PITCH_FMAX         1500.0f  /* Hz */
 #define PITCH_THRESHOLD    0.15f    /* limiar do YIN (menor = mais exigente) */

@@ -6,7 +6,6 @@
 
 #include "params.h"
 
-#define LEVEL_HOPS (PITCH_LEVEL_WIN / PITCH_HOP > 0 ? PITCH_LEVEL_WIN / PITCH_HOP : 1)
 
 int guitar_feed(Guitar *g, const float *mono, int frames)
 {
@@ -31,7 +30,6 @@ void guitar_process_hop(Guitar *g, const float *hop)
 
     /* acrescenta as amostras novas, já filtradas, logo depois da janela */
     float *dst = g->window + PITCH_WINDOW;
-    float energy = 0.0f;
     for (int i = 0; i < PITCH_HOP; i++) {
         float x = hop[i] * gain;
         float y = x - g->dc_x1 + 0.995f * g->dc_y1; /* bloqueador de DC */
@@ -39,15 +37,59 @@ void guitar_process_hop(Guitar *g, const float *hop)
         g->dc_y1 = y;
         g->lp_y1 += g->lp_coef * (y - g->lp_y1);    /* passa-baixa de 1 polo */
         dst[i] = g->lp_y1;
-        energy += y * y;
+        /* volume: sobe na hora, desce devagar (40 ms) */
+        float a = fabsf(y);
+        g->env = a > g->env ? a : g->env * g->env_rel;
+        /* agudos (passa-altas de 2 polos em ~2 kHz) para achar a palhetada */
+        g->hp1 += g->hp_coef * (y - g->hp1);
+        float h1 = y - g->hp1;
+        g->hp2 += g->hp_coef * (h1 - g->hp2);
+        float h = fabsf(h1 - g->hp2);
+        g->hf_env = h > g->hf_env ? h : g->hf_env * g->hf_rel;
     }
-    /* volume nas últimas PITCH_LEVEL_WIN amostras (os passos curtos
-       demais oscilariam dentro de um ciclo de uma corda grave) */
-    g->hop_energy[g->energy_pos] = energy;
-    g->energy_pos = (g->energy_pos + 1) % LEVEL_HOPS;
-    float esum = 0.0f;
-    for (int i = 0; i < LEVEL_HOPS; i++) esum += g->hop_energy[i];
-    float db = 20.0f * log10f(sqrtf(esum / (LEVEL_HOPS * PITCH_HOP)) + 1e-9f);
+    /* -3 dB: o pico de uma senoide fica 3 dB acima do valor eficaz, que é
+       a referência do gate e da calibração */
+    float db = 20.0f * log10f(g->env + 1e-9f) - 3.0f;
+
+    /* Palhetada: os agudos dão um salto em até ~8 ms (o ataque da palheta).
+       Batidas entre harmônicos e cordas vibrando juntas mexem no volume,
+       mas não fazem esse salto nos agudos. */
+    float hf_db = 20.0f * log10f(g->hf_env + 1e-9f);
+    float hf_min = hf_db;
+    for (int i = 0; i < 6; i++) if (g->hf_hist[i] < hf_min) hf_min = g->hf_hist[i];
+    g->hf_hist[g->hf_pos] = hf_db;
+    g->hf_pos = (g->hf_pos + 1) % 6;
+    /* Quanto os agudos precisam subir depende da nota soando: uma nota grave
+       sozinha já oscila ~10 dB nos agudos (muitos harmônicos batendo), e numa
+       nota aguda a palhetada nova sobe só ~7-11 dB. Medido nota a nota:
+       15 dB no Mi grave, descendo até 6 dB nas notas mais agudas. */
+    float thr = 15.0f;
+    if (g->tracker.current >= 0) {
+        thr = 15.0f - 0.22f * (g->tracker.current - 40);
+        if (thr > 15.0f) thr = 15.0f;
+        if (thr < 6.0f) thr = 6.0f;
+    }
+    /* Uma palhetada também aumenta o volume; abafar a corda faz um ruído
+       agudo parecido, mas com o volume caindo. */
+    float db_min = db;
+    for (int i = 0; i < 6; i++) if (g->db_hist[i] < db_min) db_min = g->db_hist[i];
+    g->db_hist[(g->hf_pos + 5) % 6] = db;
+    /* o estalo dura alguns passos: conta só o começo dele */
+    int hf_jump = hf_db - hf_min > thr && hf_db > g->tracker.off_db - 12.0f && db - db_min > 1.0f;
+    g->tracker.pick = hf_jump && !g->pick_hold;
+    g->pick_hold = hf_jump;
+
+    /* Quanto da janela de análise já é som depois da palhetada. Uma janela
+       ainda cheia do que soava antes (fim da nota anterior, cordas soltas
+       vibrando) dá leituras erradas. O YIN compara o COMEÇO da janela com
+       ela mesma atrasada, e o começo é a parte mais antiga: cada janela só
+       vale quando estiver (quase) toda com som novo. */
+    int from_silence = g->tracker.current < 0 && db > g->tracker.on_db && g->prev_db <= g->tracker.on_db;
+    if (g->tracker.pick || from_silence) g->fresh = 0;
+    else if (g->fresh < 1 << 20) g->fresh += PITCH_HOP;
+    g->prev_db = db;
+    const int ok_short = g->fresh >= PITCH_SHORT_WINDOW * 19 / 20, ok_mid = g->fresh >= PITCH_MID_WINDOW * 19 / 20,
+              ok_long = g->fresh >= PITCH_WINDOW * 19 / 20;
 
     /* Atualiza as três análises só com o que entrou e saiu da janela
        (custo pequeno e igual em todo passo) e depois anda a janela. */
@@ -64,14 +106,15 @@ void guitar_process_hop(Guitar *g, const float *hop)
            janela menor não inventa erros de oitava que a longa não teria. */
         float conf = 0.0f;
         Yin *used = &g->yin_short;
-        float hs = yin_eval(&g->yin_short, &conf);
+        float hs = ok_short ? yin_eval(&g->yin_short, &conf) : -1.0f;
         float cm = 0;
         if (hs >= PITCH_SHORT_MIN_HZ && conf > 0.85f) hz = hs;
-        else if ((hz = yin_eval(&g->yin_mid, &cm)) > 0 && cm > 0.85f) {
+        else if (ok_mid && (hz = yin_eval(&g->yin_mid, &cm)) > 0 && cm > 0.85f) {
             used = &g->yin_mid; /* janela média: cordas graves sem esperar a longa */
             conf = cm;
         }
-        else { hz = yin_eval(&g->yin, &conf); used = &g->yin; }
+        else if (ok_long) { hz = yin_eval(&g->yin, &conf); used = &g->yin; }
+        else { hz = -1.0f; conf = 0.0f; } /* janelas ainda com o som de antes: espera */
         g->tracker.conf = hz > 0 ? conf : 0;
 
         /* Correção de oitava por continuidade: com uma nota soando, uma
@@ -117,13 +160,22 @@ void guitar_reset(Guitar *g)
     for (int t = 0; t <= g->yin.tau_max; t++) g->yin.acc[t] = 0;
     for (int t = 0; t <= g->yin_mid.tau_max; t++) g->yin_mid.acc[t] = 0;
     for (int t = 0; t <= g->yin_short.tau_max; t++) g->yin_short.acc[t] = 0;
-    memset(g->hop_energy, 0, sizeof g->hop_energy);
-    g->energy_pos = 0;
+    g->env = g->hf_env = g->hp1 = g->hp2 = 0.0f;
+    for (int i = 0; i < 8; i++) g->hf_hist[i] = -120.0f;
+    for (int i = 0; i < 6; i++) g->db_hist[i] = -120.0f;
+    g->hf_pos = 0;
+    g->fresh = 1 << 20;
+    g->pick_hold = 0;
+    g->prev_db = -120.0f;
+    g->env_rel = expf(-1.0f / (0.040f * g->sr));
+    g->hf_rel  = expf(-1.0f / (0.005f * g->sr));
+    g->hp_coef = 1.0f - expf(-6.2831853f * 2000.0f / g->sr);
     g->hop_fill = 0;
     tracker_init(&g->tracker, param_get(P_GTR_GATE), GATE_HYSTERESIS_DB);
     tracker_set_refractory(&g->tracker, 60.0f, g->sr, PITCH_HOP);
     tracker_set_settle(&g->tracker, (int)(PITCH_SETTLE_MS / 1000.0f * g->sr / PITCH_HOP + 0.5f));
     tracker_set_hop(&g->tracker, PITCH_HOP);
+    g->tracker.external_pick = 1; /* palhetada vem do detector de agudos acima */
     g->tracker.fast_conf = PITCH_FAST_CONF;
     atomic_store(&g->st_note, -1);
     atomic_store(&g->st_hz, -1.0f);

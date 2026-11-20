@@ -364,6 +364,165 @@ static void test_fast_attack_noise(void)
     params_init();
 }
 
+
+/* ------------------------------------------------------------------ */
+/* Guitarra "suja", mais parecida com uma de verdade                   */
+/* ------------------------------------------------------------------ */
+/* Guitarra simulada "suja": harmônicos inarmônicos, posição da palheta,
+   cada harmônico decai num ritmo, a corda começa um pouco aguda e assenta,
+   ruído de palhetada, cordas soltas vibrando por simpatia, zumbido de 60 Hz
+   e ruído. Acordes: cordas dedilhadas com alguns ms entre si. */
+static unsigned rg_seed = 12345;
+static float rg_rand(void) { rg_seed = rg_seed * 1664525u + 1013904223u; return ((rg_seed >> 9) / 4194304.0f) - 1.0f; }
+static float rg_hz(int n) { return 440.0f * powf(2.0f, (n - 69) / 12.0f); }
+/* soma uma corda em x[start...] */
+static void rg_string(float *x, int len, int start, int note, float amp, float dur_s, float sr, float pick_pos)
+{
+    float f0 = rg_hz(note), B = 0.00012f;
+    int n = (int)(dur_s * sr);
+    if (start + n > len) n = len - start;
+    for (int k = 1; k <= 30; k++) {
+        float fk = k * f0 * sqrtf(1 + B * k * k);
+        if (fk > sr * 0.45f) break;
+        float a = amp * fabsf(sinf(k * 3.14159f * pick_pos)) / (k * 0.9f);
+        float decay = 1.2f + 0.35f * k + f0 / 300.0f; /* agudos e harmônicos altos morrem antes */
+        float ph = rg_rand() * 3.14159f;
+        for (int i = 0; i < n; i++) {
+            float t = i / sr;
+            float bend = 1.0f + 0.006f * expf(-t / 0.08f); /* ataque ~10 cents agudo, assenta */
+            float env = expf(-decay * t) * (i < 48 ? i / 48.0f : 1.0f);
+            int left = n - i, fade = (int)(0.015f * sr); /* abafada pela mão: some em 15 ms */
+            if (left < fade) env *= (float)left / fade;
+            x[start + i] += a * env * sinf(ph + 6.2831853f * fk * bend * t);
+        }
+    }
+    /* ruído da palhetada: 4 ms */
+    for (int i = 0; i < (int)(0.004f * sr) && start + i < len; i++) x[start + i] += amp * 0.5f * rg_rand() * (1 - i / (0.004f * sr));
+}
+static void rg_background(float *x, int len, float sr, float noise, float sympathetic)
+{
+    /* cordas soltas que ficam vibrando baixinho (Mi, Lá, Ré graves) + zumbido */
+    const int open[3] = {40, 45, 50};
+    for (int s = 0; s < 3; s++) {
+        float f = rg_hz(open[s]);
+        for (int i = 0; i < len; i++) x[i] += sympathetic * sinf(6.2831853f * f * i / sr + s) * (0.6f + 0.4f * sinf(i / sr * 0.7f + s));
+    }
+    for (int i = 0; i < len; i++) x[i] += noise * rg_rand() + 0.002f * sinf(6.2831853f * 60 * i / sr);
+}
+
+/* Roda o detector e devolve as notas reconhecidas em texto (" 52 54 55") */
+static int real_notes(const float *x, int len, char *seq, int cap)
+{
+    Guitar g; EventQueue q; evq_init(&q);
+    guitar_init(&g, SR, &q); guitar_reset(&g);
+    int ons = 0; seq[0] = 0;
+    for (int pos = 0; pos + PITCH_HOP <= len; pos += PITCH_HOP) {
+        guitar_process_hop(&g, x + pos);
+        Event e;
+        while (evq_pop(&q, &e)) if (e.type == EV_NOTE_ON) {
+            char t[8]; snprintf(t, sizeof t, " %d", e.note);
+            if ((int)(strlen(seq) + strlen(t)) < cap) strcat(seq, t);
+            ons++;
+        }
+    }
+    guitar_free(&g);
+    return ons;
+}
+
+static void real_case(const char *label, const float *x, int len, const char *expected)
+{
+    char seq[400];
+    real_notes(x, len, seq, sizeof seq);
+    int ok = !strcmp(seq, expected);
+    printf("  %-44s %s  notas:%s\n", label, ok ? "ok  " : "ERRO", seq);
+    CHECK(ok, "notas diferentes do esperado");
+}
+
+static void test_real_guitar(void)
+{
+    printf("Teste 1c: guitarra realista (harmônicos desafinados, cordas vibrando por simpatia, zumbido)\n");
+    params_init();
+    rg_seed = 12345;
+    int len = SR * 9;
+    float *x = calloc(len, sizeof(float));
+    char ex[400] = "";
+    const int notes[] = {40, 43, 45, 47, 50, 52, 55, 57, 59, 62, 64, 67, 69, 72, 76, 79};
+    for (int i = 0; i < 16; i++) {
+        rg_string(x, len, (int)((0.2f + i * 0.5f) * SR), notes[i], 0.25f, 0.48f, SR, 0.13f + 0.05f * (i % 3));
+        char t[8]; snprintf(t, sizeof t, " %d", notes[i]); strcat(ex, t);
+    }
+    rg_background(x, len, SR, 0.002f, 0.004f);
+    real_case("16 notas soltas, uma por palhetada", x, len, ex);
+
+    for (int note = 40; note <= 64; note += 12) {
+        memset(x, 0, len * sizeof(float));
+        ex[0] = 0;
+        for (int k = 0; k < 6; k++) {
+            rg_string(x, len, (int)((0.1f + k * 0.15f) * SR), note, 0.22f, k == 5 ? 0.5f : 0.165f, SR, 0.15f);
+            char t[8]; snprintf(t, sizeof t, " %d", note); strcat(ex, t);
+        }
+        rg_background(x, len, SR, 0.002f, 0.002f);
+        char lab[64]; snprintf(lab, sizeof lab, "nota %d palhetada 6x seguidas", note);
+        real_case(lab, x, len, ex);
+    }
+
+    memset(x, 0, len * sizeof(float));
+    const int alt[8] = {52, 55, 52, 55, 57, 55, 52, 50};
+    ex[0] = 0;
+    for (int k = 0; k < 8; k++) {
+        rg_string(x, len, (int)((0.1f + k * 0.12f) * SR), alt[k], 0.22f, 0.12f, SR, 0.15f);
+        char t[8]; snprintf(t, sizeof t, " %d", alt[k]); strcat(ex, t);
+    }
+    rg_background(x, len, SR, 0.002f, 0.002f);
+    real_case("frase rápida (120 ms por nota)", x, len, ex);
+
+    memset(x, 0, len * sizeof(float));
+    {
+        float f0 = rg_hz(57), ph = 0;
+        int s0 = (int)(0.1f * SR);
+        for (int i = 0; i < SR * 2; i++) {
+            float t = i / (float)SR;
+            float f = f0 * powf(2, 0.3f / 12 * sinf(6.2831853f * 5.5f * t) * fminf(1, t / 0.3f));
+            ph += 6.2831853f * f / SR;
+            x[s0 + i] = 0.2f * expf(-1.2f * t) * (sinf(ph) + 0.5f * sinf(2 * ph) + 0.3f * sinf(3 * ph) + 0.2f * sinf(4 * ph));
+        }
+        for (int i = 0; i < 200; i++) x[s0 + i] += 0.1f * rg_rand() * (1 - i / 200.0f);
+    }
+    rg_background(x, len, SR, 0.002f, 0.002f);
+    real_case("vibrato largo (+-30 cents) e corda abafada", x, len, " 57");
+
+    memset(x, 0, len * sizeof(float));
+    {
+        float ph = 0;
+        int s0 = (int)(0.1f * SR);
+        const int hn[3] = {52, 54, 55};
+        for (int i = 0; i < (int)(1.2f * SR); i++) {
+            float t = i / (float)SR;
+            int k = t < 0.3f ? 0 : (t < 0.6f ? 1 : 2);
+            ph += 6.2831853f * rg_hz(hn[k]) / SR;
+            x[s0 + i] = 0.2f * expf(-1.0f * t) * (sinf(ph) + 0.6f * sinf(2 * ph) + 0.3f * sinf(3 * ph));
+        }
+        for (int i = 0; i < 200; i++) x[s0 + i] += 0.1f * rg_rand() * (1 - i / 200.0f);
+    }
+    rg_background(x, len, SR, 0.002f, 0.002f);
+    real_case("hammer-on (52 -> 54 -> 55 sem palhetar)", x, len, " 52 54 55");
+
+    /* acordes: o detector toca uma nota só; ela não pode ficar trocando */
+    memset(x, 0, len * sizeof(float));
+    const int chords[6][6] = {{40, 47, 52, 56, 59, 64}, {45, 52, 57, 61, 64, -1}, {50, 57, 62, 66, -1, -1},
+                              {43, 47, 50, 55, 59, 67}, {48, 52, 55, 60, 64, -1}, {40, 47, 52, 55, 59, 64}};
+    for (int c = 0; c < 6; c++)
+        for (int k = 0; k < 6 && chords[c][k] >= 0; k++)
+            rg_string(x, len, (int)((0.2f + c * 1.2f) * SR) + k * (int)(0.012f * SR), chords[c][k], 0.15f, 1.15f, SR, 0.15f);
+    rg_background(x, len, SR, 0.002f, 0.002f);
+    char seq[400];
+    int ons = real_notes(x, len, seq, sizeof seq);
+    printf("  %-44s %s  notas:%s\n", "6 acordes dedilhados: no máximo 7 notas", ons <= 7 ? "ok  " : "ERRO", seq);
+    CHECK(ons <= 7, "acordes trocando de nota");
+    free(x);
+    params_init();
+}
+
 static void test_repick(void)
 {
     printf("Teste 4: mesma nota palhetada de novo gera nova nota\n");
@@ -786,6 +945,7 @@ int main(void)
     test_riff();
     test_octave_jumps();
     test_legato();
+    test_real_guitar();
     test_fast_attack();
     test_fast_attack_noise();
     test_repick();

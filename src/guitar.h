@@ -27,14 +27,22 @@ typedef struct {
     int           started;
     float         hop_buf[PITCH_HOP];
     int           hop_fill;
-    float         hop_energy[8]; /* energia dos últimos passos (volume em 128 amostras) */
-    int           energy_pos;
     Yin           yin;        /* janela longa (graves) */
     Yin           yin_short;  /* janela curta (agudas, menos atraso) */
     Yin           yin_mid;    /* janela média (graves, menos atraso que a longa) */
     NoteTracker   tracker;
     float         sr;
     float         dc_x1, dc_y1, lp_y1, lp_coef;
+    /* volume: seguidor de pico (não oscila dentro de um ciclo da corda) */
+    float         env, env_rel;
+    /* palhetada: o "tchic" da palheta tem muito agudo; a corda soando, pouco */
+    float         hp1, hp2, hp_coef, hf_env, hf_rel;
+    float         hf_hist[8];
+    int           fresh;        /* amostras desde a última palhetada */
+    float         prev_db;
+    float         db_hist[6];
+    int           pick_hold;    /* o estalo da palhetada anterior ainda está subindo */
+    int           hf_pos;
     float         window[PITCH_WINDOW + PITCH_HOP]; /* janela + passo novo */
     float         held_hz;    /* frequência da nota que está soando */
     /* lidos pela interface (afinador, medidor) e pelo motor */
