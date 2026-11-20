@@ -46,7 +46,20 @@ if(UNIX)
   target_link_libraries(synthcore PUBLIC m ${CMAKE_DL_LIBS})
 endif()
 
-add_executable(synth src/main.c src/gui.c src/midi.c)
+# Fontes Inter embutidas no executável (licença em assets/fonts/OFL-Inter.txt)
+set(FONT_SOURCES)
+foreach(f Regular SemiBold Bold)
+  string(TOLOWER ${f} lower)
+  set(out ${CMAKE_BINARY_DIR}/font_inter_${lower}.c)
+  add_custom_command(OUTPUT ${out}
+    COMMAND ${CMAKE_COMMAND} -DIN=${CMAKE_SOURCE_DIR}/assets/fonts/Inter-${f}.ttf
+            -DOUT=${out} -DNAME=font_inter_${lower} -P ${CMAKE_SOURCE_DIR}/cmake/embed.cmake
+    DEPENDS ${CMAKE_SOURCE_DIR}/assets/fonts/Inter-${f}.ttf ${CMAKE_SOURCE_DIR}/cmake/embed.cmake
+    COMMENT "Embutindo a fonte Inter ${f}")
+  list(APPEND FONT_SOURCES ${out})
+endforeach()
+
+add_executable(synth src/main.c src/gui.c src/ui.c src/midi.c ${FONT_SOURCES})
 target_include_directories(synth PRIVATE ${raygui_SOURCE_DIR}/src ${raygui_SOURCE_DIR}/styles)
 # raygui é só cabeçalho e gera avisos inofensivos
 set_source_files_properties(src/gui.c PROPERTIES COMPILE_OPTIONS "$<$<NOT:$<C_COMPILER_ID:MSVC>>:-Wno-unused-parameter -Wno-unused-result>")
