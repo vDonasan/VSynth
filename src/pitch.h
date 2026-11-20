@@ -57,6 +57,10 @@ typedef struct {
     int   external_pick;  /* 1: a palhetada vem de fora (campo pick), não do salto de volume */
     int   pick;           /* entrada: houve palhetada nesta análise */
     int   legato_needed;  /* leituras seguidas para trocar de nota sem palhetada */
+    int   attack_age;     /* análises desde o último ataque (palhetada ou saída do silêncio) */
+    int   start_window;   /* nota nova só até este número de análises depois do ataque */
+    int   tail_miss;      /* análises seguidas abaixo do gate sem a nota soando */
+    int   tail_hops;
     int   hop_scale;      /* 128 / tamanho do passo: converte contagens para tempo */
     float db_hist[8];     /* volumes recentes, para achar a palhetada */
     int   hist_pos;

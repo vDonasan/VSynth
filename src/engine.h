@@ -94,6 +94,7 @@ typedef struct {
 
     /* gravação: o callback escreve no anel, a interface grava no disco */
     FloatRing   rec_ring;
+    FloatRing   rec_gtr_ring;  /* gravação para diagnóstico: entrada crua da guitarra + synth */
     atomic_bool rec_on;
 } Engine;
 

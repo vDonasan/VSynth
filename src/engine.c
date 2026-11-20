@@ -61,6 +61,7 @@ int engine_init(Engine *e, float sr)
     if (looper_init(&e->looper, sr, 60.0f) < 0) return -1;
     if (guitar_init(&e->guitar, sr, &e->q_gtr) < 0) return -1;
     if (fring_init(&e->rec_ring, REC_RING_SIZE) < 0) return -1;
+    if (fring_init(&e->rec_gtr_ring, REC_RING_SIZE) < 0) return -1;
     e->audio = calloc(1, sizeof *e->audio);
     if (!e->audio) return -1;
     atomic_init(&e->scope_pos, 0);
@@ -87,6 +88,7 @@ void engine_free(Engine *e)
     looper_free(&e->looper);
     fx_free(&e->fx);
     fring_free(&e->rec_ring);
+    fring_free(&e->rec_gtr_ring);
 }
 
 void engine_latency_start(Engine *e)
@@ -436,6 +438,11 @@ void engine_process(Engine *e, const float *in, int in_channels, float *out, int
         }
         if (arp_on) arp_process(&e->arp, sink_to_synth, e, n, e->sr, bpm);
         synth_render(&e->synth, e->mono, n);
+        if (recording && gtr) /* esquerda: o que entrou da guitarra, cru; direita: o synth */
+            for (int i = 0; i < n && done + i < 4096; i++) {
+                fring_push(&e->rec_gtr_ring, e->gtr_in[done + i]);
+                fring_push(&e->rec_gtr_ring, e->mono[i] * synth_gain);
+            }
         for (int i = 0; i < n; i++) {
             float g = gtr && done + i < 4096 ? e->gtr_in[done + i] * gtr_gain : 0.0f;
             e->l[i] = e->r[i] = e->mono[i] * synth_gain + g;

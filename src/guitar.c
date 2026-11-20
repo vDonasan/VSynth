@@ -99,7 +99,10 @@ void guitar_process_hop(Guitar *g, const float *hop)
     memmove(g->window, g->window + PITCH_HOP, PITCH_WINDOW * sizeof(float));
 
     float hz = -1.0f;
-    if (db > g->tracker.off_db) {
+    /* com uma nota soando, continua lendo abaixo do gate (o fim da nota é
+       decidido pela altura, ver tracker_process) */
+    float read_floor = g->tracker.current >= 0 ? g->tracker.off_db - PITCH_TAIL_DB : g->tracker.off_db;
+    if (db > read_floor) {
         /* Janela curta primeiro: uma nota aguda é reconhecida assim que
            ~11 ms dela entram na janela, sem esperar as maiores. O YIN
            sempre escolhe o MENOR período que passa no teste, então uma

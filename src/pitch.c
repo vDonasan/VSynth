@@ -161,6 +161,10 @@ void tracker_init(NoteTracker *t, float on_db, float hysteresis_db)
     t->external_pick  = 0;
     t->pick           = 0;
     t->legato_needed  = 4;
+    t->attack_age     = 100000;
+    t->start_window   = 45;
+    t->tail_miss      = 0;
+    t->tail_hops      = 15;
     t->hist_pos       = 0;
     for (int i = 0; i < 8; i++) t->db_hist[i] = -120.0f;
 }
@@ -172,6 +176,8 @@ void tracker_set_hop(NoteTracker *t, int hop)
     /* 20 ms de leituras iguais para trocar de nota sem palhetada (48 kHz) */
     t->legato_needed = (int)(PITCH_LEGATO_MS / 1000.0f * 48000.0f / hop + 0.5f);
     if (t->legato_needed < 2) t->legato_needed = 2;
+    t->start_window = (int)(PITCH_START_MS / 1000.0f * 48000.0f / hop + 0.5f);
+    t->tail_hops    = (int)(PITCH_TAIL_MS / 1000.0f * 48000.0f / hop + 0.5f);
 }
 
 void tracker_set_refractory(NoteTracker *t, float ms, float sr, int hop)
@@ -208,8 +214,31 @@ int tracker_process(NoteTracker *t, float hz, float db, Event *out, int max)
     if (t->since_off < 1000) t->since_off++;
     if (t->since_onset < 1000) t->since_onset++;
 
-    /* Silêncio: solta a nota (histerese evita liga-desliga no decaimento) */
+    /* Ataque: palhetada (detector de agudos) ou volume saindo do silêncio.
+       Só um ataque pode começar uma nota: zumbido e ruído constantes, mesmo
+       acima do gate, não têm ataque e não viram nota. */
+    if ((t->external_pick && t->pick) || (db > t->on_db && prev_db <= t->on_db)) t->attack_age = 0;
+    else if (t->attack_age < 100000) t->attack_age++;
+
+    /* Abaixo do gate a nota NÃO termina na hora: enquanto a altura lida
+       continuar batendo com ela, segue soando (até PITCH_TAIL_DB mais
+       baixo). Termina quando o som some, quando a leitura deixa de bater
+       por PITCH_TAIL_MS, ou bem abaixo do gate. Assim um gate alto não
+       corta a nota cedo. Abaixo do gate nada troca de nota. */
     if (t->current >= 0 && db < t->off_db) {
+        int same = hz > 0.0f && fabsf(hz_to_midi(hz) - (float)t->current) < 0.7f && db > t->off_db - PITCH_TAIL_DB;
+        if (same) t->tail_miss = 0;
+        else t->tail_miss++;
+        if (same || (t->tail_miss < t->tail_hops && db > t->off_db - PITCH_TAIL_DB)) {
+            t->cand_count = 0;
+            return n;
+        }
+    }
+    if (t->current >= 0 && db >= t->off_db) t->tail_miss = 0;
+
+    /* Silêncio: solta a nota */
+    if (t->current >= 0 && db < t->off_db) {
+        t->tail_miss = 0;
         out[n++] = mk(EV_NOTE_OFF, t->current, 0, 0.0f);
         t->last_off       = t->current;
         t->since_off      = 0;
@@ -263,6 +292,8 @@ int tracker_process(NoteTracker *t, float hz, float db, Event *out, int max)
 
     /* Ruído de abafar a corda ainda carrega a afinação: não é nota nova */
     if (t->current < 0 && note == t->last_off && t->since_off <= t->rering) return n;
+    /* sem ataque recente, nada começa (zumbido, ruído, corda vibrando sozinha) */
+    if (t->current < 0 && t->attack_age > t->start_window) { t->cand_count = 0; return n; }
 
     /* Mudança sem palhetada (legato) perto do ruído: no fim de uma nota o
        chiado gera leituras aleatórias. Só aceita com sinal bem acima do

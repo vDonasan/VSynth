@@ -17,6 +17,9 @@
 #define PITCH_FAST_CONF    0.92f    /* leitura com confiança acima disso não espera confirmação */
 #define PITCH_SETTLE_MS    16.0f    /* tempo ignorando a nota antiga após a palhetada */
 #define PITCH_HOP          64       /* nova análise a cada 1,3 ms */
+#define PITCH_TAIL_DB      16.0f    /* nota segue até 16 dB abaixo do fim do gate, se a altura bater */
+#define PITCH_TAIL_MS      40.0f    /* abaixo do gate: 40 ms sem a nota certa e ela termina */
+#define PITCH_START_MS     120.0f   /* nota só começa até 120 ms depois de um ataque */
 #define PITCH_LEGATO_MS    20.0f    /* troca de nota sem palhetada: leituras iguais por 20 ms */
 #define PITCH_FMIN         70.0f    /* Hz – cobre afinação drop-D (D2 = 73 Hz) */
 #define PITCH_FMAX         1500.0f  /* Hz */

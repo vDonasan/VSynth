@@ -73,6 +73,7 @@ typedef struct {
 
     /* gravação */
     Recorder rec;
+    Recorder rec_gtr;  /* entrada crua da guitarra + synth, para diagnóstico */
     double   rec_start;
     float    rec_buf[16384];
 
@@ -424,6 +425,27 @@ static void drain_recording(Gui *g)
         fring_read(&g->e->rec_ring, g->rec_buf, n);
         recorder_write(&g->rec, g->rec_buf, n / 2);
     }
+    /* entrada da guitarra (diagnóstico): só existe no modo Guitarra */
+    while ((avail = fring_available(&g->e->rec_gtr_ring) & ~1u) > 0) {
+        unsigned n = avail < 16384 ? avail : 16384;
+        fring_read(&g->e->rec_gtr_ring, g->rec_buf, n);
+        if (!recorder_active(&g->rec_gtr)) {
+            char path[600];
+            snprintf(path, sizeof path, "%.*s-guitarra.wav", (int)strlen(g->rec.path) - 4, g->rec.path);
+            if (recorder_start(&g->rec_gtr, path, (int)g->e->sr) < 0) continue;
+            /* e os ajustes do momento, para reproduzir exatamente */
+            snprintf(path, sizeof path, "%.*s-ajustes.txt", (int)strlen(g->rec.path) - 4, g->rec.path);
+            FILE *f = fopen(path, "w");
+            if (f) {
+                fprintf(f, "# Ajustes usados na gravação (para diagnóstico)\n");
+                fprintf(f, "entrada = %s\ncanal = %d\nbuffer = %d\n", g->e->cap_name, atomic_load(&g->e->cap_channel),
+                        g->e->period_frames);
+                params_write_all(f);
+                fclose(f);
+            }
+        }
+        recorder_write(&g->rec_gtr, g->rec_buf, n / 2);
+    }
 }
 
 static void toggle_recording(Gui *g)
@@ -436,6 +458,7 @@ static void toggle_recording(Gui *g)
         snprintf(path, sizeof path, REC_DIR "/gravacao-%s.wav", stamp);
         if (recorder_start(&g->rec, path, (int)g->e->sr) < 0) { set_status(g, "Não foi possível criar o arquivo WAV"); return; }
         fring_clear(&g->e->rec_ring);
+        fring_clear(&g->e->rec_gtr_ring);
         atomic_store(&g->e->rec_on, true);
         g->rec_start = GetTime();
         set_status(g, "Gravando...");
@@ -443,8 +466,12 @@ static void toggle_recording(Gui *g)
         atomic_store(&g->e->rec_on, false);
         drain_recording(g);
         char m[600];
-        snprintf(m, sizeof m, "Gravação salva: %s (%.1f s)", g->rec.path, g->rec.frames / g->e->sr);
+        if (recorder_active(&g->rec_gtr))
+            snprintf(m, sizeof m, "Gravação salva: %s (%.1f s) + entrada da guitarra em ...-guitarra.wav", g->rec.path,
+                     g->rec.frames / g->e->sr);
+        else snprintf(m, sizeof m, "Gravação salva: %s (%.1f s)", g->rec.path, g->rec.frames / g->e->sr);
         recorder_stop(&g->rec);
+        recorder_stop(&g->rec_gtr);
         set_status(g, m);
     }
 }
@@ -770,7 +797,7 @@ static void draw_top_bar(Gui *g)
     Rectangle rb = {x - 138, 10, 138, 36};
     if (ui_button(rb, rl, rec ? UI_BTN_DANGER : UI_BTN_NORMAL)) toggle_recording(g);
     if (rec) ui_led(rb.x + 16, rb.y + 18, 5, (int)(GetTime() * 2) % 2 == 0, C_RED);
-    ui_tooltip(rb, rec ? "Clique para parar e salvar o WAV." : "Grava tudo o que sai (sem o metrônomo) em gravacoes/.");
+    ui_tooltip(rb, rec ? "Clique para parar e salvar o WAV." : "Grava tudo o que sai (sem o metrônomo) em gravacoes/. No modo Guitarra, grava também o som cru da guitarra (...-guitarra.wav).");
     x -= 138 + 8;
 
     Rectangle lb = {x - 124, 10, 124, 36};

@@ -153,7 +153,18 @@ Para não se confundir com uma guitarra de verdade, o detector:
 - dá uma margem de 0,7 semitom para a nota que está soando (a corda começa
   um pouco aguda e assenta);
 - só troca de nota sem palhetada (hammer-on, slide) com leituras seguidas
-  por 20 ms.
+  por 20 ms;
+- só **começa** uma nota depois de um ataque (palhetada ou som saindo do
+  silêncio): zumbido e ruído constantes não viram nota, mesmo com gate baixo;
+- só **termina** a nota quando ela some de verdade: abaixo do gate a nota
+  continua enquanto a altura lida bater com ela (até 16 dB abaixo), então um
+  gate alto não corta a nota cedo.
+
+**Se a guitarra ainda se comportar mal:** no modo Guitarra, clique em
+**Gravar**, toque algumas notas soltas e um acorde e pare. Além da gravação
+normal, saem `...-guitarra.wav` (o som cru que entrou, junto com o que o
+synth tocou) e `...-ajustes.txt` (gate, ganho e demais ajustes). Esses dois
+arquivos permitem reproduzir e corrigir o problema exatamente.
 
 **Acordes:** o detector reconhece uma nota por vez. Num acorde ele fica numa
 nota só, sem trocar, mas ela nem sempre é uma nota do acorde.

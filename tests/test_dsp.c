@@ -507,6 +507,40 @@ static void test_real_guitar(void)
     rg_background(x, len, SR, 0.002f, 0.002f);
     real_case("hammer-on (52 -> 54 -> 55 sem palhetar)", x, len, " 52 54 55");
 
+    /* zumbido forte acima do gate (gate baixo): sem ataque, não vira nota */
+    memset(x, 0, len * sizeof(float));
+    for (int i = 0; i < SR * 2; i++) {
+        float t = i / (float)SR;
+        x[i] = 0.006f * (sinf(6.2831853f * 60 * t) + 0.6f * sinf(6.2831853f * 120 * t + 1) + 0.4f * sinf(6.2831853f * 180 * t + 2)) +
+               0.001f * rg_rand();
+    }
+    param_set(P_GTR_GATE, -66);
+    real_case("zumbido forte, gate baixo: nenhuma nota", x, len, "");
+
+    /* gate alto: a nota não pode cortar cedo enquanto ainda soa */
+    {
+        memset(x, 0, len * sizeof(float));
+        rg_string(x, len, (int)(0.1f * SR), 52, 0.05f, 1.0f, SR, 0.15f);
+        rg_background(x, len, SR, 0.0008f, 0.0006f);
+        param_set(P_GTR_GATE, -30);
+        Guitar g; EventQueue q; evq_init(&q);
+        guitar_init(&g, SR, &q); guitar_reset(&g);
+        int on_at = -1, off_at = -1;
+        for (int pos = 0; pos + PITCH_HOP <= SR * 2; pos += PITCH_HOP) {
+            guitar_process_hop(&g, x + pos);
+            Event e;
+            while (evq_pop(&q, &e)) {
+                if (e.type == EV_NOTE_ON && on_at < 0) on_at = pos;
+                if (e.type == EV_NOTE_OFF && on_at >= 0 && off_at < 0) off_at = pos;
+            }
+        }
+        guitar_free(&g);
+        float held = (off_at - (int)(0.1f * SR)) / (float)SR;
+        printf("  %-44s %s  soou %.2f s de 1,00 s\n", "gate alto: nota não corta cedo", on_at >= 0 && held > 0.85f ? "ok  " : "ERRO", held);
+        CHECK(on_at >= 0 && held > 0.85f, "nota cortada cedo com gate alto");
+        params_init();
+    }
+
     /* acordes: o detector toca uma nota só; ela não pode ficar trocando */
     memset(x, 0, len * sizeof(float));
     const int chords[6][6] = {{40, 47, 52, 56, 59, 64}, {45, 52, 57, 61, 64, -1}, {50, 57, 62, 66, -1, -1},
