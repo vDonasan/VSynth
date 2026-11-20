@@ -156,6 +156,7 @@ void tracker_init(NoteTracker *t, float on_db, float hysteresis_db)
     t->since_off      = 1000;
     t->rering         = 0;
     t->hop_scale      = 1;
+    t->since_onset    = 1000;
     t->hist_pos       = 0;
     for (int i = 0; i < 8; i++) t->db_hist[i] = -120.0f;
 }
@@ -195,9 +196,10 @@ int tracker_process(NoteTracker *t, float hz, float db, Event *out, int max)
     t->db_hist[t->hist_pos] = db;
     t->hist_pos = (t->hist_pos + 1) & 7;
     t->last_db = db;
-    if (max < 2) return 0;
+    if (max < 3) return 0;
     if (t->since_on < 1000) t->since_on++;
     if (t->since_off < 1000) t->since_off++;
+    if (t->since_onset < 1000) t->since_onset++;
 
     /* Silêncio: solta a nota (histerese evita liga-desliga no decaimento) */
     if (t->current >= 0 && db < t->off_db) {
@@ -210,9 +212,18 @@ int tracker_process(NoteTracker *t, float hz, float db, Event *out, int max)
         return n;
     }
 
+    /* Palhetada a partir do silêncio: avisa já, antes de saber a nota
+       (o motor pode começar o som abafado enquanto a altura se confirma) */
+    if (t->current < 0 && db > t->on_db && prev_db <= t->on_db && t->since_onset > t->refractory) {
+        out[n++] = mk(EV_ONSET, 0, db_to_velocity(t, db), 0.0f);
+        t->since_onset = 0;
+    }
+
     /* Salto de volume com nota soando = nova palhetada. A janela de análise
        ainda contém a nota anterior, então espera a nova altura se firmar. */
     if (t->current >= 0 && db - prev_db > 9.0f && t->since_on > t->refractory) {
+        out[n++] = mk(EV_ONSET, 0, db_to_velocity(t, db), 0.0f);
+        t->since_onset    = 0;
         t->attack_pending = 1;
         t->pend_hops      = 0;
         t->candidate      = -1;

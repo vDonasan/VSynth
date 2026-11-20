@@ -76,6 +76,9 @@ typedef struct {
     Adsr     amp_env, filt_env;
     unsigned age;
     int      sustained;       /* soltou a tecla com o pedal pressionado */
+    int      pending;         /* guitarra: começou na palhetada, nota ainda não confirmada */
+    float    damp;            /* 1 = abafada (nota provisória) ... 0 = normal */
+    float    kill;            /* > 0: sumindo rápido (palhetada que não virou nota) */
 } Voice;
 
 typedef struct {
@@ -95,6 +98,11 @@ void        synth_load_params(Synth *s); /* copia a tabela de parâmetros para o
 void        synth_handle_event(Synth *s, const Event *e);
 void        synth_render(Synth *s, float *out, int frames); /* mono */
 int         synth_active_voices(const Synth *s);
+/* Ataque imediato da guitarra: começa a nota abafada, numa altura
+   provisória, assim que a palhetada é detectada. O NOTE_ON seguinte
+   (SRC_AUDIO) acerta a altura na hora e tira o abafamento. */
+void        synth_onset(Synth *s, int velocity, float guess_note);
+void        synth_onset_cancel(Synth *s); /* palhetada sem nota: solta a provisória */
 const char *waveform_name(Waveform w);
 
 #endif

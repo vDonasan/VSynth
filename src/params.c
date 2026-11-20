@@ -50,6 +50,7 @@ static const ParamDef DEFS[P_COUNT] = {
     [P_GTR_BLEND]   = {"gtr_mistura", "Mistura", 0, 1, 0.25f, K_LIN, "mix", NULL, 0},
     [P_GTR_OCTAVE]  = {"gtr_oitava", "Oitava", -2, 2, 0, K_INT, "", NULL, 0},
     [P_GTR_BENDS]   = {"gtr_bends", "Seguir bends", 0, 1, 1, K_BOOL, "", NULL, 0},
+    [P_GTR_FAST]    = {"gtr_ataque_imediato", "Ataque imediato", 0, 1, 1, K_BOOL, "", NULL, F_NOPRESET},
     [P_KEYS_OCTAVE] = {"teclado_oitava", "Oitava", 1, 7, 4, K_INT, "", NULL, F_NOPRESET | F_HIDDEN},
 
     [P_DIST_ON]     = {"dist_ligada", "Distorção", 0, 1, 0, K_BOOL, "", NULL, 0},
@@ -338,6 +339,7 @@ static const char *HELP[P_COUNT] = {
     [P_GTR_BLEND]  = "Quanto do som limpo da guitarra aparece junto com o synth.",
     [P_GTR_OCTAVE] = "Toca o synth oitavas acima ou abaixo do que a guitarra toca.",
     [P_GTR_BENDS]  = "O synth acompanha bends e vibrato da guitarra.",
+    [P_GTR_FAST]   = "O som começa já na palhetada, abafado, e a nota se acerta assim que é reconhecida. Bem menos atraso nas cordas graves.",
     [P_DIST_ON]    = "Liga ou desliga a distorção.",
     [P_DIST_DRIVE] = "Quanto saturar. Mais drive = mais sujeira e sustain.",
     [P_DIST_TONE]  = "Brilho da distorção. Baixe se ficar áspero.",

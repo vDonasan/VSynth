@@ -19,7 +19,8 @@ typedef enum {
     EV_PITCH_BEND,  /* value = semitons (-2..+2) */
     EV_CC,          /* note = nº do controlador, velocity = valor 0-127 */
     EV_PITCH_TRACK, /* value = nota fracionária seguida continuamente */
-    EV_ALL_OFF      /* solta todas as notas */
+    EV_ALL_OFF,     /* solta todas as notas */
+    EV_ONSET        /* guitarra: palhetada detectada, altura ainda desconhecida */
 } EventType;
 
 typedef enum { SRC_MIDI, SRC_KEYS, SRC_AUDIO, SRC_ARP, SRC_HARM } EventSource;

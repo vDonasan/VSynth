@@ -142,6 +142,9 @@ static void voice_start(Synth *s, Voice *v, int note, float exact_note, float ve
     v->freq        = v->target_freq;
     v->age         = ++s->counter;
     v->sustained   = 0;
+    v->pending     = 0;
+    v->damp        = 0.0f;
+    v->kill        = 0.0f;
     if (!was_active) {
         v->phase1 = v->phase2 = 0.0f;
         v->ic1eq = v->ic2eq = 0.0f;
@@ -160,6 +163,13 @@ static void note_on(Synth *s, const Event *e)
     if (e->source == SRC_AUDIO) {
         /* Guitarra é monofônica: se já há nota soando, desliza (legato). */
         Voice *v = find_held_audio_voice(s);
+        if (v && v->pending) { /* confirma a nota provisória: altura certa já */
+            v->note        = e->note;
+            v->target_freq = v->freq = midi_to_hz(exact);
+            v->velocity    = vel;
+            v->pending     = 0; /* o abafamento some em ~3 ms (synth_render) */
+            return;
+        }
         if (v) {
             v->note        = e->note;
             v->target_freq = midi_to_hz(exact);
@@ -183,10 +193,41 @@ static void note_off(Synth *s, const Event *e)
     for (int i = 0; i < MAX_VOICES; i++) {
         Voice *v = &s->voices[i];
         if (!v->active || v->source != e->source) continue;
+        if (v->pending) continue; /* nota provisória: espera a confirmação */
         if (e->source == SRC_AUDIO || v->note == e->note) {
             if (s->sustain && e->source != SRC_AUDIO) { v->sustained = 1; continue; }
             if (v->amp_env.stage != ENV_IDLE) v->amp_env.stage = ENV_RELEASE;
             if (v->filt_env.stage != ENV_IDLE) v->filt_env.stage = ENV_RELEASE;
+        }
+    }
+}
+
+void synth_onset(Synth *s, int velocity, float guess_note)
+{
+    float vel = velocity / 127.0f;
+    Voice *v = find_held_audio_voice(s);
+    int note = (int)lroundf(guess_note);
+    if (v) { /* palhetada nova com nota soando: redispara na altura atual */
+        float f = v->freq;
+        voice_start(s, v, v->note, guess_note, vel, SRC_AUDIO);
+        v->freq = v->target_freq = f;
+    } else {
+        v = alloc_voice(s);
+        voice_start(s, v, note, guess_note, vel, SRC_AUDIO);
+    }
+    v->pending = 1;
+    v->damp    = 1.0f;
+}
+
+void synth_onset_cancel(Synth *s)
+{
+    for (int i = 0; i < MAX_VOICES; i++) {
+        Voice *v = &s->voices[i];
+        if (v->active && v->pending) {
+            v->pending        = 0;
+            v->kill           = 1.0f; /* some em ~5 ms, sem esperar o release do preset */
+            v->amp_env.stage  = ENV_RELEASE;
+            v->filt_env.stage = ENV_RELEASE;
         }
     }
 }
@@ -208,6 +249,7 @@ static void all_off(Synth *s)
     s->sustain = 0;
     for (int i = 0; i < MAX_VOICES; i++) {
         s->voices[i].sustained = 0;
+        s->voices[i].pending   = 0;
         s->voices[i].amp_env.stage  = ENV_RELEASE;
         s->voices[i].filt_env.stage = ENV_RELEASE;
     }
@@ -250,6 +292,9 @@ void synth_handle_event(Synth *s, const Event *e)
     case EV_ALL_OFF:
         all_off(s);
         break;
+    case EV_ONSET:
+        synth_onset(s, e->velocity, e->value);
+        break;
     }
 }
 
@@ -263,6 +308,12 @@ int synth_active_voices(const Synth *s)
 /* ------------------------------------------------------------------ */
 /* Renderização                                                        */
 /* ------------------------------------------------------------------ */
+/* Nota provisória (ataque imediato da guitarra): filtro mais fechado e
+   volume menor até a altura ser confirmada. Soa como o "tchic" da
+   palhetada; a nota de verdade abre logo em seguida. */
+#define DAMP_OCTAVES 2.5f
+#define DAMP_GAIN    0.6f
+
 void synth_render(Synth *s, float *out, int frames)
 {
     const Patch *p  = &s->patch;
@@ -271,6 +322,8 @@ void synth_render(Synth *s, float *out, int frames)
     const float level_coef = 1.0f - expf(-1.0f / (0.015f * sr));
     const float detune_mul = exp2f(p->osc2_detune / 12.0f);
     const float k = 2.0f - 1.95f * p->resonance; /* amortecimento do filtro */
+    const float damp_coef = 1.0f - expf(-1.0f / (0.003f * sr)); /* sai do abafado em ~3 ms */
+    const float kill_mul  = expf(-1.0f / (0.0015f * sr));        /* -60 dB em ~10 ms */
 
     for (int i = 0; i < frames; i++) {
         s->input_level_smooth += (s->input_level - s->input_level_smooth) * level_coef;
@@ -310,7 +363,8 @@ void synth_render(Synth *s, float *out, int frames)
             float x   = (1.0f - mix) * o1 + mix * o2;
 
             /* Filtro de variáveis de estado (topologia de Simper/Cytomic) */
-            float fc = clampf(p->cutoff * exp2f(dst[DST_CUTOFF]), 20.0f, sr * 0.45f);
+            if (!v->pending && v->damp > 0.0f) { v->damp -= v->damp * damp_coef; if (v->damp < 1e-3f) v->damp = 0.0f; }
+            float fc = clampf(p->cutoff * exp2f(dst[DST_CUTOFF] - DAMP_OCTAVES * v->damp), 20.0f, sr * 0.45f);
             float g  = tanf(PI_F * fc / sr);
             float a1 = 1.0f / (1.0f + g * (g + k));
             float a2 = g * a1, a3 = g * a2;
@@ -321,7 +375,13 @@ void synth_render(Synth *s, float *out, int frames)
             v->ic2eq = 2.0f * v2 - v->ic2eq;
 
             /* VCA */
-            float gain = amp * (0.35f + 0.65f * v->velocity) * clampf(1.0f + dst[DST_AMP], 0.0f, 2.0f);
+            float gain = amp * (0.35f + 0.65f * v->velocity) * clampf(1.0f + dst[DST_AMP], 0.0f, 2.0f) *
+                         (1.0f - DAMP_GAIN * v->damp);
+            if (v->kill > 0.0f) {
+                gain *= v->kill;
+                v->kill *= kill_mul;
+                if (v->kill < 1e-4f) { v->active = 0; v->kill = 0.0f; v->amp_env.stage = ENV_IDLE; }
+            }
             sum += v2 * gain;
         }
         out[i] = tanhf(sum * p->volume); /* saturação suave: nunca passa de ±1 */

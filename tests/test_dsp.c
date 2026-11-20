@@ -99,7 +99,7 @@ static int detect(const float *x, int len, Timed *out, int max)
         guitar_process_hop(&g, x + pos);
         Event e;
         while (evq_pop(&q, &e))
-            if (e.type != EV_PITCH_TRACK && n < max) out[n++] = (Timed){e, pos + PITCH_HOP};
+            if (e.type != EV_PITCH_TRACK && e.type != EV_ONSET && n < max) out[n++] = (Timed){e, pos + PITCH_HOP};
     }
     guitar_free(&g);
     return n;
@@ -258,6 +258,110 @@ static void test_legato(void)
     printf("  eventos:%s\n  esperado: on52 on55 off55 (sem off entre as duas: o synth desliza)\n", log);
     CHECK(!strcmp(log, " on52 on55 off55"), "legato errado");
     free(x);
+}
+
+/* Ataque imediato: guitarra simulada passando pelo motor inteiro.
+   Mede quando o som começa e quando a altura fica certa. */
+static float zero_cross_hz(const float *x, int n, int *first_out)
+{
+    int first = -1, last = -1, count = 0;
+    for (int i = 1; i < n; i++)
+        if (x[i - 1] <= 0 && x[i] > 0) { if (first < 0) first = i; last = i; count++; }
+    if (first_out) *first_out = first;
+    return count > 1 ? (count - 1) * (float)SR / (last - first) : 0;
+}
+
+static void test_fast_attack(void)
+{
+    printf("Teste 3d: ataque imediato (som na palhetada, nota acertada depois)\n");
+    static Engine e;
+    const int notes[] = {40, 45, 50, 55, 64, 76};
+    for (int fast = 0; fast <= 1; fast++) {
+        double on_sum = 0, ok_sum = 0;
+        int all_ok = 1;
+        for (unsigned k = 0; k < sizeof notes / sizeof notes[0]; k++) {
+            engine_init(&e, SR);
+            params_init();
+            param_set(P_INPUT_MODE, 2); param_set(P_GTR_BLEND, 0); param_set(P_REV_ON, 0);
+            param_set(P_OSC1_WAVE, 0); param_set(P_OSC_MIX, 0); param_set(P_CUTOFF, 18000);
+            param_set(P_GTR_FAST, (float)fast);
+            params_smooth_snap();
+            Pick p[] = {{-1, 0.1f, 0}, {notes[k], 0.6f, 0.4f}, {-1, 0.2f, 0}};
+            int len;
+            float *x = render_guitar(p, 3, &len);
+            float *out = calloc(2 * len, sizeof(float)), *mono = calloc(len, sizeof(float));
+            for (int pos = 0; pos + 64 <= len; pos += 64) engine_process(&e, x + pos, 1, out + 2 * pos, 64);
+            for (int i = 0; i < len; i++) mono[i] = out[2 * i];
+            int start = (int)(0.1f * SR), on = -1, ok = -1;
+            for (int i = start; i < len; i++) if (fabsf(mono[i]) > 0.01f) { on = i; break; }
+            /* altura certa: a partir de quando 3 ciclos seguidos da saída
+               ficam a menos de 1/4 de semitom da nota tocada */
+            float want = midi_hz(notes[k]);
+            int win = (int)(3 * SR / want) + 2;
+            for (int i = on > 0 ? on : start; i + 3 * win < start + (int)(0.5f * SR); i += 24) {
+                int good = 1, first = 0; /* e continua certa nas 3 janelas seguintes */
+                for (int r = 0; r < 3 && good; r++) {
+                    int f;
+                    float hz = zero_cross_hz(mono + i + r * win, win, &f);
+                    if (r == 0) first = f;
+                    good = hz > 0 && fabsf(12 * log2f(hz / want)) < 0.25f;
+                }
+                if (good) { ok = i + first; break; } /* conta do primeiro ciclo medido */
+            }
+            if (getenv("DBG3D")) printf("    nota %d: som %.1f ms, certa %.1f ms\n", notes[k], (on - start) * 1000.0 / SR, (ok - start) * 1000.0 / SR);
+            if (on < 0 || ok < 0) all_ok = 0;
+            else { on_sum += (on - start) * 1000.0 / SR; ok_sum += (ok - start) * 1000.0 / SR; }
+            free(x); free(out); free(mono);
+            engine_free(&e);
+        }
+        int cnt = sizeof notes / sizeof notes[0];
+        printf("  ataque imediato %s: som em %.1f ms, nota certa em %.1f ms (médias)\n",
+               fast ? "ligado " : "desligado", on_sum / cnt, ok_sum / cnt);
+        CHECK(all_ok, "alguma nota não soou ou não chegou na altura certa");
+        if (fast) CHECK(on_sum / cnt < 6.0, "o som deveria começar logo na palhetada");
+    }
+    params_init();
+}
+
+/* Batidas nas cordas abafadas (ruído, sem nota) com o ataque imediato
+   ligado: o som provisório tem que sumir sozinho, sem ficar preso */
+static void test_fast_attack_noise(void)
+{
+    printf("Teste 3e: batidas sem nota não deixam som preso\n");
+    static Engine e;
+    int len = (int)(3.2f * SR);
+    float *x = calloc(len, sizeof(float)), *out = calloc(2 * len, sizeof(float));
+    for (int b = 0; b < 10; b++) {
+        int s0 = (int)(0.1f * SR) + b * (int)(0.3f * SR);
+        for (int i = 0; i < (int)(0.02f * SR); i++) x[s0 + i] = frand() * 0.3f * expf(-i / 300.0f);
+    }
+    for (int i = 0; i < len; i++) x[i] += frand() * 0.0005f;
+    float tails[2][10];
+    for (int fast = 0; fast <= 1; fast++) {
+        engine_init(&e, SR);
+        params_init();
+        param_set(P_INPUT_MODE, 2); param_set(P_GTR_BLEND, 0); param_set(P_REV_ON, 0);
+        param_set(P_GTR_FAST, (float)fast);
+        params_smooth_snap();
+        memset(out, 0, 2 * len * sizeof(float));
+        for (int pos = 0; pos + 64 <= len; pos += 64) engine_process(&e, x + pos, 1, out + 2 * pos, 64);
+        for (int b = 0; b < 10; b++) {
+            int s0 = (int)(0.1f * SR) + b * (int)(0.3f * SR);
+            float t = 0;
+            for (int i = s0 + (int)(0.1f * SR); i < s0 + (int)(0.29f * SR); i++) t = fmaxf(t, fabsf(out[2 * i]));
+            tails[fast][b] = t;
+        }
+        engine_free(&e);
+    }
+    /* onde o modo normal ficou em silêncio, o ataque imediato também tem que ficar
+       (às vezes uma batida vira nota de verdade nos dois modos: aí não conta) */
+    int quiet = 0, stuck = 0;
+    for (int b = 0; b < 10; b++)
+        if (tails[0][b] < 0.001f) { quiet++; if (tails[1][b] >= 0.001f) stuck++; }
+    printf("  %d batidas sem nota: %d deixaram som com o ataque imediato\n", quiet, stuck);
+    CHECK(quiet >= 5 && stuck == 0, "ficou som preso depois de uma batida sem nota");
+    free(x); free(out);
+    params_init();
 }
 
 static void test_repick(void)
@@ -681,6 +785,8 @@ int main(void)
     test_riff();
     test_octave_jumps();
     test_legato();
+    test_fast_attack();
+    test_fast_attack_noise();
     test_repick();
     test_fx();
     test_smoothing();

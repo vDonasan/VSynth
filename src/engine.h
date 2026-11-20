@@ -67,6 +67,9 @@ typedef struct {
     /* estado do callback */
     int    arp_was_on;
     int    gtr_arp_note;
+    int    gtr_pending;      /* ataque imediato: nota provisória soando */
+    int    gtr_pending_age;  /* amostras desde a palhetada */
+    float  gtr_last_note;    /* última nota da guitarra: palpite para a próxima */
     int    harm_map[2][128][2]; /* notas de harmonia por tecla (MIDI, teclado) */
     int    harm_audio[2];       /* harmonia da nota atual da guitarra */
     int    mout_audio_note, mout_prev;

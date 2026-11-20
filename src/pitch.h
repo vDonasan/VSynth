@@ -53,6 +53,7 @@ typedef struct {
     int   settle;         /* até a janela se renovar, a nota antiga não vale */
     int   last_off, since_off, rering; /* abafou: a mesma nota não volta já */
     float conf;           /* confiança da última análise (0..1) */
+    int   since_onset;    /* análises desde o último EV_ONSET */
     int   hop_scale;      /* 128 / tamanho do passo: converte contagens para tempo */
     float db_hist[8];     /* volumes recentes, para achar a palhetada */
     int   hist_pos;

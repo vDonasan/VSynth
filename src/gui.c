@@ -826,16 +826,16 @@ static void draw_tuner(Gui *g, Rectangle r)
         snprintf(oct, sizeof oct, "%d", g->tuner_note / 12 - 1);
     }
     Color nc = !fresh ? C_TEXT2 : (tuned ? C_GREEN : C_TEXT);
-    ui_text(nm, r.x + 12, r.y + 34, 38, UI_BOLD, nc);
-    float nw = ui_text_width(nm, 38, UI_BOLD);
-    ui_text(oct, r.x + 14 + nw, r.y + 52, 17, UI_SEMIBOLD, nc);
+    ui_text(nm, r.x + 12, r.y + 26, 30, UI_BOLD, nc);
+    float nw = ui_text_width(nm, 30, UI_BOLD);
+    ui_text(oct, r.x + 14 + nw, r.y + 40, 15, UI_SEMIBOLD, nc);
     if (fresh) {
         char t[48];
         snprintf(t, sizeof t, "%.1f Hz · %+.0f cents", g->tuner_hz, g->tuner_cents);
-        ui_text(t, r.x + 72, r.y + 52, 12.5f, UI_REGULAR, C_TEXT2);
+        ui_text(t, r.x + 72, r.y + 41, 12.5f, UI_REGULAR, C_TEXT2);
     }
     /* régua de cents com ponteiro */
-    Rectangle bar = {r.x + 14, r.y + r.height - 30, r.width - 28, 20};
+    Rectangle bar = {r.x + 14, r.y + r.height - 26, r.width - 28, 18};
     for (int i = 0; i <= 20; i++) {
         float x = bar.x + bar.width * i / 20.0f;
         float h = i == 10 ? 10 : (i % 5 == 0 ? 8 : 5);
@@ -931,7 +931,14 @@ static void input_guitar(Gui *g, Rectangle p)
     ui_param_switch((Rectangle){x + w - 44, y + 3, 44, 24}, P_GTR_BENDS, C_CYAN);
     ui_tooltip((Rectangle){x + w - 140, y, 140, 30}, "O synth acompanha bends e vibrato da corda.");
 
-    draw_tuner(g, (Rectangle){x, p.y + p.height - 120, w, 106});
+    y += 38;
+    ui_text("Ataque imediato", x, y + 6, 12, UI_REGULAR, C_TEXT);
+    ui_text(param_geti(P_GTR_FAST) ? "som já na palhetada" : "som quando a nota é reconhecida", x, y + 22, 10.5f,
+            UI_REGULAR, C_TEXT2);
+    ui_param_switch((Rectangle){x + w - 44, y + 6, 44, 24}, P_GTR_FAST, C_CYAN);
+    ui_tooltip((Rectangle){x, y, w - 54, 36}, param_help(P_GTR_FAST));
+
+    draw_tuner(g, (Rectangle){x, p.y + p.height - 100, w, 88});
 }
 
 static void input_keys(Gui *g, Rectangle p)

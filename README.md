@@ -24,8 +24,9 @@ pelo **piano na tela**, por um **teclado/controlador MIDI** ou por uma
 - **Mais:** gravação em WAV, afinador, osciloscópio, MIDI learn, pedal de
   sustain, tap tempo, tela cheia (F1), dicas em todos os controles e as
   configurações lembradas entre uma sessão e outra
-- **Pouco atraso:** detecção da guitarra em 12–17 ms, buffer ajustável, modo
-  exclusivo (WASAPI), drivers ASIO no Windows e um medidor de latência real
+- **Pouco atraso:** som na palhetada (~1 ms) com o ataque imediato, nota
+  reconhecida em 11–17 ms, buffer a partir de 32 amostras, modo exclusivo
+  (WASAPI), drivers ASIO no Windows e um medidor de latência real
 
 ## Compilar
 
@@ -96,24 +97,35 @@ Dicas para a guitarra: toque **uma nota por vez** (a detecção é monofônica),
 abafe as outras cordas e prefira o captador do braço. Uma palhetada nova
 reinicia a nota; hammer-on e slide deslizam até a nota seguinte.
 
-Atraso entre a palhetada e o som, só da detecção (medido nos testes):
+Atraso entre a palhetada e o som (guitarra simulada nos testes, sem
+contar a placa de som):
 
-| Notas | Primeira versão | Agora |
-|---|---|---|
-| Ré do drop-D | 33–39 ms | 28 ms |
-| Cordas Mi, Lá e Ré soltas (graves) | 33–39 ms | 17 ms |
-| Da corda Sol para cima | 28–39 ms | 12 ms |
+| Notas | Primeira versão | Reconhecer a nota | Com **Ataque imediato** |
+|---|---|---|---|
+| Ré do drop-D | 33–39 ms | 25 ms | som em ~1 ms |
+| Cordas Mi, Lá e Ré soltas (graves) | 33–39 ms | 17 ms | som em ~1 ms |
+| Da corda Sol para cima | 28–39 ms | 11 ms | som em ~1 ms |
 
-O detector usa três janelas de análise: curta (11 ms) para as notas a partir
-de 180 Hz, média (17 ms) para os graves e longa (27 ms) só para o Ré do
-drop-D. Quando a leitura é muito confiável, a nota sai sem esperar a segunda
-análise. A isso se soma o atraso da placa de som (veja abaixo).
+**Ataque imediato** (ligado por padrão, no painel da guitarra): o som começa
+assim que a palhetada é detectada, abafado e na altura da nota anterior, e se
+acerta (abre o filtro e pula para a nota certa) quando a nota é reconhecida.
+O ouvido percebe o começo do som na palhetada, então a sensação de atraso cai
+muito, principalmente nas cordas graves. Uma batida nas cordas que não vira
+nota some em ~30 ms. Se o "tchic" do começo incomodar num preset, desligue a
+chave. Com o arpejador ligado ele fica desativado.
+
+O detector roda dentro do próprio áudio, a cada 64 amostras (1,3 ms), com
+três janelas de análise: curta (11 ms) para as notas a partir de 180 Hz,
+média (17 ms) para os graves e longa (27 ms) só para o Ré do drop-D. A nota
+começa no ponto exato do bloco em que foi reconhecida, então o tamanho do
+buffer não aumenta esse atraso. Leituras muito confiáveis não esperam
+confirmação. Usa ~6% de um núcleo.
 
 #### Diminuir o atraso da placa de som
 
 Na **engrenagem** da barra de cima (Configurações de áudio):
-- **Tamanho do buffer:** 64 ou 128 amostras dão menos atraso. Se aparecerem
-  estalos, aumente.
+- **Tamanho do buffer:** de 32 a 512 amostras. 32 ou 64 dão menos atraso
+  (32 funciona melhor com ASIO). Se aparecerem estalos, aumente.
 - **Modo exclusivo (Windows):** o programa usa a placa sozinho (WASAPI).
 - **ASIO (Windows):** com uma interface de áudio, escolha a saída `ASIO: ...`.
   Costuma ser o caminho de menor atraso.
@@ -186,7 +198,7 @@ src/
   arp.c         arpejador
   looper.c      looper com overdub e desfazer
   pitch.c       detecção de altura (YIN) e seguidor de notas
-  guitar.c      thread que analisa a entrada de áudio
+  guitar.c      análise da entrada (roda dentro do callback de áudio)
   midi.c        PortMidi: entrada, saída (guitarra -> MIDI) e MIDI learn
   recorder.c    gravação WAV
   queue.h       filas sem trava entre as threads e o áudio
@@ -203,8 +215,8 @@ Regras que mantêm o som sem estalos:
   até 9x mais lenta) são tratados como zero (FTZ/DAZ).
 - Interface, MIDI e guitarra conversam com ele por **filas sem trava**
   (`queue.h`) e por **parâmetros atômicos** (`params.c`).
-- A análise da guitarra (YIN, ~4% de um núcleo) roda numa thread própria; o
-  callback só copia as amostras.
+- A análise da guitarra (YIN incremental) roda dentro do callback, com custo
+  pequeno e igual em todo passo: só entram e saem da conta as amostras novas.
 
 Para criar um novo parâmetro:
 1. Acrescente o nome em `params.h`.
@@ -231,6 +243,8 @@ Os testes:
 - medem a suavização dos knobs e o ganho da proteção contra denormais;
 - salvam e carregam presets;
 - medem a latência com um "cabo" simulado da saída na entrada;
+- conferem o ataque imediato (som na palhetada, nota certa depois) e que
+  batidas nas cordas sem nota não deixam som preso;
 - geram `demo.wav` com o motor completo.
 
 Para testar a interface sem placa de som: `./build/synth --null-audio`.

@@ -52,6 +52,7 @@ int engine_init(Engine *e, float sr)
     synth_init(&e->synth, sr);
     arp_init(&e->arp);
     e->gtr_arp_note = -1;
+    e->gtr_last_note = 52.0f; /* Mi da corda Ré: meio do braço */
     evq_init(&e->q_mout);
     e->mout_audio_note = -1;
     for (int i = 0; i < 2 * 128 * 2; i++) (&e->harm_map[0][0][0])[i] = -1;
@@ -272,6 +273,18 @@ static int *harm_slot(Engine *e, const Event *ev)
 
 static void route(Engine *e, Event ev, int arp_on)
 {
+    if (ev.type == EV_ONSET) {
+        /* Ataque imediato: o som começa na palhetada, abafado, na altura da
+           última nota; o NOTE_ON que vem em seguida acerta a altura. Com o
+           arpejador ligado não faz sentido (ele precisa da nota certa). */
+        if (!param_geti(P_GTR_FAST) || arp_on) return;
+        Event o = ev;
+        o.value = e->gtr_last_note;
+        synth_handle_event(&e->synth, &o);
+        e->gtr_pending = 1;
+        e->gtr_pending_age = 0;
+        return;
+    }
     if (ev.source == SRC_AUDIO) {
         int shift = 12 * param_geti(P_GTR_OCTAVE);
         int n = ev.note + shift;
@@ -280,6 +293,7 @@ static void route(Engine *e, Event ev, int arp_on)
         ev.value += (float)shift;
         if (ev.type == EV_PITCH_TRACK && !param_geti(P_GTR_BENDS)) return;
         if (!param_geti(P_GTR_BENDS) && ev.type == EV_NOTE_ON) ev.value = (float)ev.note;
+        if (ev.type == EV_NOTE_ON) { e->gtr_last_note = ev.value; e->gtr_pending = 0; }
         if (param_geti(P_MOUT_SRC) == 1) midi_out_emit(e, &ev);
     }
 
@@ -413,6 +427,11 @@ void engine_process(Engine *e, const float *in, int in_channels, float *out, int
             int m = done + n <= 4096 ? n : 4096 - done;
             if (guitar_feed(&e->guitar, e->gtr_in + done, m))
                 while (evq_pop(&e->q_gtr, &ev)) route(e, ev, arp_on);
+            /* palhetada que não virou nota (ruído, corda abafada): solta */
+            if (e->gtr_pending && (e->gtr_pending_age += n) > (int)(0.032f * e->sr)) {
+                synth_onset_cancel(&e->synth);
+                e->gtr_pending = 0;
+            }
             e->synth.input_level = atomic_load_explicit(&e->guitar.level, memory_order_relaxed);
         }
         if (arp_on) arp_process(&e->arp, sink_to_synth, e, n, e->sr, bpm);
