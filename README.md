@@ -1,61 +1,251 @@
 # Virtual Synth
 
-Sintetizador em C.
+A synthesizer written in C that you can play with your **computer keyboard**,
+the **on-screen piano**, a **MIDI keyboard/controller** or a
+**guitar/microphone**.
 
-![Tela principal, aba Efeitos](docs/efeitos.png)
+![Main window, Effects tab](docs/efeitos.png)
 
-## Baixar
+> The app's interface is in Brazilian Portuguese. In this README, on-screen
+> labels are shown as they appear in the app, with a translation, e.g.
+> **Gravar** (Record).
 
-Não precisa compilar nem usar o terminal: baixe, descompacte e abra.
+## Download
 
-| Sistema | Download |
+No compiling or terminal needed: download, unzip and open.
+
+| System | Download |
 |---|---|
-| **Windows** 10/11 (64 bits) | [VirtualSynth-Windows.zip](https://github.com/vDonasan/VSynth/releases/latest/download/VirtualSynth-Windows.zip) |
-| **macOS** 11 ou mais novo (Apple Silicon e Intel) | [VirtualSynth-macOS.zip](https://github.com/vDonasan/VSynth/releases/latest/download/VirtualSynth-macOS.zip) |
+| **Windows** 10/11 (64-bit) | [VirtualSynth-Windows.zip](https://github.com/vDonasan/VSynth/releases/latest/download/VirtualSynth-Windows.zip) |
+| **macOS** 11 or newer (Apple Silicon and Intel) | [VirtualSynth-macOS.zip](https://github.com/vDonasan/VSynth/releases/latest/download/VirtualSynth-macOS.zip) |
 | **Linux** x86_64 | [VirtualSynth-Linux.tar.gz](https://github.com/vDonasan/VSynth/releases/latest/download/VirtualSynth-Linux.tar.gz) |
 
-Todas as versões: [Releases](https://github.com/vDonasan/VSynth/releases).
+All versions: [Releases](https://github.com/vDonasan/VSynth/releases).
 
-- **Windows:** abra `VirtualSynth.exe`. Na primeira vez, se aparecer "O Windows
-  protegeu o computador", clique em *Mais informações* → *Executar assim mesmo*
-  (o programa não é assinado digitalmente).
-- **macOS:** arraste o app para Aplicativos e, na primeira vez, clique com o
-  botão direito → *Abrir* → *Abrir*. Permita o microfone para usar a guitarra.
-- **Linux:** abra `VirtualSynth` (precisa de X11 ou XWayland com OpenGL).
+- **Windows:** extract the zip (right-click → *Extract All*) and open
+  `VirtualSynth.exe`. The first time, if "Windows protected your PC" appears,
+  click *More info* → *Run anyway* (the app is not digitally signed).
+- **macOS:** drag the app to Applications. The first time, right-click it →
+  *Open* → *Open*. Allow microphone access to use a guitar.
+- **Linux:** open `VirtualSynth` (needs X11 or XWayland with OpenGL).
 
-Presets e configurações ficam ao lado do programa (no macOS, em
+Presets, settings and recordings are kept next to the program (on macOS, in
 `~/Library/Application Support/Virtual Synth`).
 
-Sintetizador com interface gráfica que você toca pelo **teclado do computador**,
-pelo **piano na tela**, por um **teclado/controlador MIDI** ou por uma
-**guitarra/microfone** (o programa descobre a nota que você está tocando).
+## Features
 
-- **Som:** 2 osciladores, filtro com ressonância, 2 envelopes, LFO, 8 vozes
-- **Modulação:** 6 "cabos" que ligam fontes (LFO, envelope, velocity, roda de mod.,
-  intensidade da guitarra) a destinos (altura, filtro, volume, mistura)
-- **Efeitos:** distorção, chorus, phaser, delay (livre ou no BPM, ping-pong) e
-  reverb. Liga/desliga e ordem ajustáveis
-- **Arpejador:** 5 modos, 1/4 a 1/32, até 4 oitavas, "segurar"
-- **Harmonizador:** acrescenta terça, quinta, oitava ou um acorde, seguindo o
-  tom e a escala (ou intervalo fixo). A voz extra acompanha os bends da guitarra
-- **Guitarra → MIDI:** as notas detectadas saem como MIDI (com pitch bend) para
-  Reaper, Ableton, FL Studio etc. A guitarra passa a tocar qualquer instrumento virtual
-- **Looper:** grava, repete, grava por cima e desfaz (até 60 s), com metrônomo
-- **Presets:** 21 de fábrica em 8 categorias (Lead, Pad, Baixo, Teclas, Pluck,
-  Arpejo, Guitarra) mais os seus, com navegador e busca
-- **Mais:** gravação em WAV, afinador, osciloscópio, MIDI learn, pedal de
-  sustain, tap tempo, tela cheia (F1), dicas em todos os controles e as
-  configurações lembradas entre uma sessão e outra
-- **Pouco atraso:** som na palhetada (~1 ms) com o ataque imediato, nota
-  reconhecida em 11–17 ms, buffer a partir de 32 amostras, modo exclusivo
-  (WASAPI), drivers ASIO no Windows e um medidor de latência real
+- **Sound:** 2 oscillators, resonant filter, 2 envelopes, LFO, 8 voices
+- **Modulation:** 6 "patch cables" connecting sources (LFO, filter envelope,
+  velocity, mod wheel, guitar level) to destinations (pitch, cutoff, volume,
+  oscillator mix)
+- **Effects:** distortion, chorus, phaser, delay (free or synced to BPM,
+  ping-pong) and reverb, as a pedalboard: switch each pedal on/off and drag to
+  reorder
+- **Arpeggiator:** 5 modes, 1/4 to 1/32, up to 4 octaves, hold
+- **Harmonizer:** adds a third, fifth, octave or a chord, following the key and
+  scale (or a fixed interval). The extra voice follows guitar bends
+- **Guitar, two ways:**
+  - **Notes mode** recognizes each note you play. It drives the synth, the
+    harmonizer and the arpeggiator, and is sent out as MIDI (with pitch bend)
+    to REAPER, Ableton, FL Studio, etc.
+  - **Direct mode** uses the string's own waveform as the sound source, like
+    guitar synth pedals do. The only delay is the audio buffer, and there are
+    no wrong notes to jump between
+- **Looper:** record, loop, overdub and undo (up to 60 s), with metronome
+- **Presets:** 21 factory presets in 7 categories (Lead, Pad, Bass, Keys,
+  Pluck, Arpeggio, Guitar) plus your own, with a browser and search
+- **More:** WAV recording, tuner, oscilloscope, MIDI learn, sustain pedal,
+  tap tempo, full screen (F1), tooltips on every control, and settings
+  remembered between sessions
+- **Low latency:** buffers from 32 samples, exclusive mode (WASAPI), ASIO
+  drivers on Windows and a real round-trip latency meter
 
-## Compilar
+## How to use
 
-Só é preciso para mexer no código. O projeto usa CMake. Na primeira compilação ele **baixa sozinho** o raylib
-(janela), o miniaudio (áudio) e o PortMidi (MIDI) e, no Windows, também o
-PortAudio e o SDK ASIO. É preciso estar conectado à internet. A fonte Inter já
-vem no repositório e fica embutida no executável.
+### 1. Choose the input (left panel)
+
+| Input | What to do |
+|---|---|
+| **Teclado** (Keyboard) | Play the two rows of letter keys (the on-screen piano shows which). ←/→ change the octave, **Space** is the sustain pedal. The computer keyboard and the on-screen piano work in any mode. |
+| **MIDI** | Pick the device from the list. If you plugged it in with the app open, click **Atualizar** (Refresh). Pitch bend, mod wheel and sustain pedal work out of the box. |
+| **Guitarra** (Guitar) | Pick the audio input (ideally an audio interface) and the channel. Click **Calibrar gate** (Calibrate gate) and keep the strings muted for 3 seconds: the gate (orange line) is set just above the noise. You can also set the **Gate** knob by hand. |
+
+Guitar panel:
+- **Mistura** (Mix): blends the clean guitar with the synth. All the way left
+  is synth only.
+- **Synth: Notas | Direto** (Notes | Direct): how the synth follows the guitar
+  (see below).
+- **Oitava** (Octave): plays the synth 1 or 2 octaves up or down (great for
+  bass lines).
+- **Bends** (Notes mode): the synth follows bends and vibrato.
+- **Ataque imediato** (Immediate attack, Notes mode): see below.
+- **Afinador** (Tuner): turns green when the string is in tune.
+
+#### Notes mode
+
+Each note is recognized (pitch detection) and played on the synth. Play
+**one note at a time** (detection is monophonic), mute the other strings and
+prefer the neck pickup. A new pick restarts the note; hammer-ons and slides
+glide to the next note.
+
+Time from pick to sound, measured with a simulated guitar in the tests (not
+counting the sound card):
+
+| Notes | Note recognized | With **Ataque imediato** |
+|---|---|---|
+| Drop-D low D | 27 ms | sound starts at ~1 ms |
+| Low E, A and D strings | 19 ms | sound starts at ~1 ms |
+| G string and up | 12 ms | sound starts at ~1 ms |
+
+For comparison, published measurements put Jam Origin MIDI Guitar at about
+30 ms on low notes and hexaphonic-pickup systems (Fishman TriplePlay) at about
+13 ms on the low E. Nothing that recognizes the note can go much lower: one
+cycle of the low E alone lasts 12 ms.
+
+**Ataque imediato** (Immediate attack, on by default): the sound starts as
+soon as the pick is detected, muffled and at the previous note's pitch, then
+snaps to the right note (filter opens, pitch jumps) when the note is
+recognized. Your ear hears the sound start at the pick, so the delay feels much
+shorter, especially on the low strings. A hit on the strings that doesn't turn
+into a note fades out in ~30 ms. If the "click" at the start bothers you in a
+preset, switch it off. It is disabled while the arpeggiator is on.
+
+To cope with a real guitar, the detector:
+- recognizes a **pick by the pick's high-frequency click** (not by level
+  changes, which on a low string fluctuate all the time), and only if the
+  level rises;
+- reads the pitch only when the whole analysis window holds sound from after
+  the pick (no leftovers of the previous note or of ringing open strings);
+- allows 0.7 semitone of tolerance around the sounding note (the string starts
+  slightly sharp and settles);
+- changes note without a new pick (hammer-on, slide) only after 20 ms of
+  consistent readings;
+- **starts** a note only after an attack (a pick, or sound coming out of
+  silence): steady hum and noise never become notes, even with a low gate;
+- **ends** a note only when it is really gone: below the gate, the note keeps
+  sounding while the detected pitch still matches it (down to 16 dB lower),
+  so a high gate doesn't cut notes short.
+
+**Chords:** Notes mode recognizes one note at a time. On a chord it holds a
+single note without jumping around, but that note is not always part of the
+chord. Use Direct mode for chords.
+
+The detector runs inside the audio callback every 64 samples (1.3 ms), with
+three YIN analysis windows: short (11 ms) for notes from 180 Hz up, medium
+(17 ms) for the low strings, and long (27 ms) only for drop-D. The note
+starts at the exact point in the audio block where it was recognized, so the
+buffer size doesn't add to this delay.
+
+#### Direct mode
+
+Instead of recognizing the note and then playing it, the synth uses the
+string's own waveform as its sound source, like guitar synth pedals (Boss SY).
+OSC1 is the string's waveform reshaped: square (the sign of the wave), sine
+(the isolated fundamental), saw and triangle (derived from the zero
+crossings). So:
+
+- there is no delay beyond the audio buffer (the sound starts at ~1 ms);
+- there are no wrong notes for the synth to jump between: with strings ringing
+  strongly, the time with an audibly wrong pitch went from ~6% (Notes mode) to
+  under 1% in the tests;
+- bends and vibrato follow automatically;
+- chords turn into a synth fuzz (like the analog guitar synths).
+
+A band-pass filter around the note removes harmonics and lower ringing
+strings; it opens on each pick and closes around the note once it is
+confirmed. OSC2 (with its detune) and the octave shift need the note's
+period, so they come in once the note is confirmed (~12–19 ms). The sound
+only opens on a pick and closes when you mute the string, so ringing strings
+and hum don't play by themselves. Filter, envelopes (triggered by the pick),
+LFO and the modulation matrix work as on the synth. MIDI output, harmonizer
+and arpeggiator need Notes mode.
+
+#### If the guitar still misbehaves
+
+In Guitar mode, click **Gravar** (Record), play a few single notes and a
+chord, and stop. Besides the normal recording, the `gravacoes/` folder gets
+`...-guitarra.wav` (left: the raw guitar input; right: what the synth played)
+and `...-ajustes.txt` (gate, gain and all other settings). These two files are
+enough to reproduce and fix the problem exactly.
+
+#### Lowering the sound card's delay
+
+In the **gear** button on the top bar (audio settings):
+- **Buffer size:** 32 to 512 samples. 32 or 64 give the least delay (32 works
+  best with ASIO). If you hear clicks, raise it.
+- **Exclusive mode (Windows):** the app takes the sound card for itself
+  (WASAPI).
+- **ASIO (Windows):** with an audio interface, choose the `ASIO: ...` output.
+  The guitar input then comes from the same driver, and **Painel do driver**
+  (Driver panel) opens the manufacturer's control panel. If the driver refuses
+  48000 Hz, change the rate there. Usually the lowest-latency path.
+- **Measure the real latency:** connect a cable from the interface's output to
+  its input (or hold the mic to the speaker) and click **Medir** (Measure). The
+  app plays 5 clicks, listens for each one coming back and shows the median
+  round-trip time.
+
+If the delay feels much longer than the numbers above, most of it is probably
+the audio path, not the note detection: on Windows, shared mode can easily add
+20 to 40 ms. Measure it and switch to ASIO or exclusive mode.
+
+### 2. Shape the sound (tabs)
+
+- **Som** (Sound): waveforms, filter, envelopes and LFO.
+- **Efeitos** (Effects): the pedalboard. Stomp the big switch to turn a pedal
+  on; drag a pedal by its handle to change the order. The "Cadeia de sinal"
+  (signal chain) line shows the path. Delay **Tempo** in 1/8, 1/16... follows
+  the BPM.
+- **Modulação** (Modulation): each row is a cable. Example: source LFO, via
+  mod wheel, destination pitch = vibrato that appears when you move the wheel.
+- **Arp / Harmonia** (Arp / Harmony): switch on the arpeggiator and hold a
+  chord. In the harmonizer, pick the interval, key and scale of the song.
+  "Só guitarra" (guitar only) leaves the keyboard alone; "Tudo" (everything)
+  harmonizes any input.
+- **Looper:** **Gravar** (Record) → play → **Fechar o loop** (Close loop) →
+  **Gravar por cima** (Overdub)... The **Enter** key presses the big button, so
+  you don't have to let go of the guitar.
+- **Saída MIDI** (MIDI out): in **Enviar** (Send), choose **Guitarra** (only
+  the played guitar note, with bends) or **Tudo** (also keyboard, harmony and
+  arpeggio). Then choose the destination:
+  - **Linux and macOS:** use the virtual port "Sintetizador". It shows up as a
+    MIDI input in your DAW.
+  - **Windows:** install **loopMIDI** (free), create a port, click **Atualizar**
+    (Refresh) and select it here and in the DAW.
+
+  Set the instrument's pitch bend range in the DAW to the same value as here
+  (default 2). To hear only the DAW, set the guitar Mix to guitar only or the
+  synth level to 0.
+
+### 3. Top bar
+
+- **Preset:** the ‹ › arrows step through presets. Click the name to open the
+  **browser**: categories on the left, search by name or sound ("delay",
+  "vibrato"...), click to audition, double-click or Enter to close. The ↑ ↓
+  keys also change preset.
+- **Salvar** (Save): type a name, pick a category and press Enter. The preset
+  goes to the `presets/` folder and shows up in the browser. Presets don't
+  change the input, the gate or the master volume.
+- **MIDI Learn:** switch it on, click a control (it gets an orange outline) and
+  turn a knob on your controller; that knob now controls the item.
+  Right-click to undo. The map is saved in `midi-learn.txt`.
+- **Gravar** (Record): records everything that comes out (without the
+  metronome) to `gravacoes/`.
+- **Pânico** (Panic): silences all notes and stops the looper.
+
+Hover over any control to see what it does. The app remembers the input,
+devices, buffer, preset and all settings in `configuracoes.ini`.
+
+| | |
+|---|---|
+| ![Preset browser](docs/presets.png) | ![Sound tab](docs/som.png) |
+| ![Arpeggiator and harmonizer](docs/arp-harmonia.png) | ![Looper](docs/looper.png) |
+
+## Building
+
+Only needed to work on the code. The project uses CMake. On the first build it
+**downloads** raylib (window), miniaudio (audio) and PortMidi (MIDI) and, on
+Windows, also PortAudio and the ASIO SDK, so you need an internet connection.
+The Inter font is in the repository and gets embedded in the executable.
 
 ### Linux (Ubuntu/Debian)
 ```sh
@@ -76,264 +266,115 @@ cmake --build build -j
 ```
 
 ### Windows
-Use o **MSYS2** (https://www.msys2.org). Abra o terminal "MSYS2 UCRT64" e rode:
+Use **MSYS2** (https://www.msys2.org). Open the "MSYS2 UCRT64" terminal and
+run:
 ```sh
 pacman -S --needed mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake git make
 cmake -B build -G "MSYS Makefiles"
 cmake --build build -j
 ./build/synth.exe
 ```
-O `synth.exe` já sai com tudo embutido: dá para copiar para outro computador.
-O Visual Studio (MSVC) não é suportado, porque o código usa `pthread` e
-atômicos do C11.
+`synth.exe` comes out with everything embedded: you can copy it to another
+computer. Visual Studio (MSVC) is not supported, because the code uses
+`pthread` and C11 atomics.
 
-Sem MIDI: `cmake -B build -DSYNTH_MIDI=OFF`.
+Options:
+- Without MIDI: `cmake -B build -DSYNTH_MIDI=OFF`.
+- Without ASIO: `-DSYNTH_ASIO=OFF`.
+- Cross-compiling from Linux to Windows (how the downloads are built):
+  `cmake -B build-win -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-w64.cmake`.
 
-Do Linux para Windows (como os downloads são feitos):
-`cmake -B build-win -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-w64.cmake`.
+**ASIO SDK.** The Windows build includes ASIO support. The Steinberg ASIO SDK
+2.3 is downloaded during configuration (from the `jcelerier/asio-2` mirror).
+To use the official zip, already extracted:
+`cmake -B build -DASIOSDK_DIR=C:/path/to/asiosdk`.
 
-**Downloads automáticos:** `.github/workflows/release.yml` compila e testa nos
-três sistemas a cada envio. Para publicar uma versão nova, na página do
-repositório: **Releases → Draft a new release**, crie a etiqueta (ex.: `v1.1.0`)
-e clique em **Publish release**. Em poucos minutos os três downloads são
-anexados sozinhos. (Também funciona com `git tag v1.1.0 && git push --tags`.)
+**Automatic downloads.** `.github/workflows/release.yml` builds and tests on
+all three systems on every push (the tests also run on a real Windows
+machine). To publish a new version, on the repository page go to
+**Releases → Draft a new release**, create the tag (e.g. `v1.1.0`) and click
+**Publish release**. A few minutes later the three downloads are attached
+automatically. (`git tag v1.1.0 && git push --tags` works too.)
 
-**ASIO (menos atraso no Windows).** O build do Windows já vem com suporte
-aos drivers ASIO das interfaces de áudio. Na engrenagem (Configurações de
-áudio), escolha a saída `ASIO: nome da sua interface`: a entrada da
-guitarra passa a vir do mesmo driver, e o botão **Painel do driver** abre o
-painel do fabricante. Se o driver recusar 48000 Hz, mude a taxa nesse
-painel. O SDK ASIO 2.3 da Steinberg é baixado sozinho na configuração (do
-espelho `jcelerier/asio-2`); para usar o ZIP oficial já extraído:
-`cmake -B build -DASIOSDK_DIR=C:/caminho/asiosdk`. Sem ASIO:
-`-DSYNTH_ASIO=OFF`.
-
-## Como usar
-
-### 1. Escolha a entrada (painel da esquerda)
-
-| Entrada | O que fazer |
-|---|---|
-| **Teclado** | Toque nas duas fileiras de letras (o desenho mostra quais são as teclas). Setas ←/→ mudam a oitava, **Espaço** é o pedal de sustain. O teclado do computador e o piano funcionam em qualquer modo. |
-| **MIDI** | Escolha o dispositivo na lista. Se você o ligou com o programa aberto, clique em **Atualizar**. Pitch bend, roda de modulação e pedal já funcionam. |
-| **Guitarra** | Escolha a entrada de áudio (de preferência uma interface de áudio) e o canal. Clique em **Calibrar gate** e deixe as cordas abafadas por 3 segundos: o gate (traço laranja) fica logo acima do ruído. Também dá para ajustar o knob **Gate** à mão. |
-
-Painel da guitarra:
-- **Mistura:** mistura o som limpo da guitarra com o synth. "Só synth" deixa só o sintetizador.
-- **Oitava:** toca o synth 1 ou 2 oitavas acima ou abaixo (ótimo para fazer baixo).
-- **Seguir bends:** o synth acompanha bends e vibrato.
-- **Afinador:** fica verde quando a corda está afinada.
-
-Dicas para a guitarra: toque **uma nota por vez** (a detecção é monofônica),
-abafe as outras cordas e prefira o captador do braço. Uma palhetada nova
-reinicia a nota; hammer-on e slide deslizam até a nota seguinte.
-
-Atraso entre a palhetada e o som (guitarra simulada nos testes, sem
-contar a placa de som):
-
-| Notas | Primeira versão | Reconhecer a nota | Com **Ataque imediato** |
-|---|---|---|---|
-| Ré do drop-D | 33–39 ms | 27 ms | som em ~1 ms |
-| Cordas Mi, Lá e Ré soltas (graves) | 33–39 ms | 19 ms | som em ~1 ms |
-| Da corda Sol para cima | 28–39 ms | 12 ms | som em ~1 ms |
-
-**Modo direto** (painel da guitarra → *Synth: Notas | Direto*): em vez de
-reconhecer a nota e tocá-la, o synth usa a própria onda da corda como fonte do
-som, como os pedais de synth de guitarra (Boss SY). O OSC1 é a onda da corda
-transformada: quadrada (o sinal da onda), seno (a fundamental isolada), serra e
-triângulo (derivados dos cruzamentos). Por isso:
-
-- não há atraso além do buffer de áudio (o som começa em ~1 ms);
-- não existe "nota errada" para o synth pular: com as cordas ressoando, a altura
-  errada audível caiu de ~5% do tempo (modo Notas) para menos de 1%;
-- bends e vibrato vêm junto, sem nada para ajustar;
-- acordes viram um fuzz sintético (como nos synths de guitarra analógicos).
-
-O OSC2 (com a desafinação) e a Oitava precisam do período da nota: entram assim
-que o reconhecimento confirma a nota (~12–19 ms). O som só abre com uma
-palhetada e fecha quando a corda é abafada, então cordas ressoando e zumbido não
-fazem som sozinhos. Filtro, envelopes (disparados pela palhetada), LFO e a
-matriz de modulação funcionam como no synth. MIDI, harmonizador e arpejador
-precisam do modo Notas.
-
-**Ataque imediato** (ligado por padrão, no painel da guitarra): o som começa
-assim que a palhetada é detectada, abafado e na altura da nota anterior, e se
-acerta (abre o filtro e pula para a nota certa) quando a nota é reconhecida.
-O ouvido percebe o começo do som na palhetada, então a sensação de atraso cai
-muito, principalmente nas cordas graves. Uma batida nas cordas que não vira
-nota some em ~30 ms. Se o "tchic" do começo incomodar num preset, desligue a
-chave. Com o arpejador ligado ele fica desativado.
-
-Para não se confundir com uma guitarra de verdade, o detector:
-- reconhece a **palhetada pelo estalo agudo da palheta** (não por variações de
-  volume, que numa corda grave oscilam o tempo todo), e só se o volume subir;
-- só lê a nota quando a janela de análise inteira já é som depois da
-  palhetada (sem restos da nota anterior ou de cordas soltas vibrando);
-- dá uma margem de 0,7 semitom para a nota que está soando (a corda começa
-  um pouco aguda e assenta);
-- só troca de nota sem palhetada (hammer-on, slide) com leituras seguidas
-  por 20 ms;
-- só **começa** uma nota depois de um ataque (palhetada ou som saindo do
-  silêncio): zumbido e ruído constantes não viram nota, mesmo com gate baixo;
-- só **termina** a nota quando ela some de verdade: abaixo do gate a nota
-  continua enquanto a altura lida bater com ela (até 16 dB abaixo), então um
-  gate alto não corta a nota cedo.
-
-**Se a guitarra ainda se comportar mal:** no modo Guitarra, clique em
-**Gravar**, toque algumas notas soltas e um acorde e pare. Além da gravação
-normal, saem `...-guitarra.wav` (o som cru que entrou, junto com o que o
-synth tocou) e `...-ajustes.txt` (gate, ganho e demais ajustes). Esses dois
-arquivos permitem reproduzir e corrigir o problema exatamente.
-
-**Acordes:** o detector reconhece uma nota por vez. Num acorde ele fica numa
-nota só, sem trocar, mas ela nem sempre é uma nota do acorde.
-
-O detector roda dentro do próprio áudio, a cada 64 amostras (1,3 ms), com
-três janelas de análise: curta (11 ms) para as notas a partir de 180 Hz,
-média (17 ms) para os graves e longa (27 ms) só para o Ré do drop-D. A nota
-começa no ponto exato do bloco em que foi reconhecida, então o tamanho do
-buffer não aumenta esse atraso. Leituras muito confiáveis não esperam
-confirmação. Usa ~6% de um núcleo.
-
-#### Diminuir o atraso da placa de som
-
-Na **engrenagem** da barra de cima (Configurações de áudio):
-- **Tamanho do buffer:** de 32 a 512 amostras. 32 ou 64 dão menos atraso
-  (32 funciona melhor com ASIO). Se aparecerem estalos, aumente.
-- **Modo exclusivo (Windows):** o programa usa a placa sozinho (WASAPI).
-- **ASIO (Windows):** com uma interface de áudio, escolha a saída `ASIO: ...`.
-  Costuma ser o caminho de menor atraso.
-- **Medir a latência real:** ligue um cabo da saída na entrada da interface
-  (ou encoste o microfone no alto-falante) e clique em **Medir**. O programa
-  toca 5 cliques, ouve cada um voltar e mostra a mediana do tempo de ida e volta.
-
-### 2. Ajuste o som (abas)
-
-- **Som:** formas de onda, filtro, envelopes e LFO.
-- **Efeitos:** marque a caixinha para ligar. As setas ▲▼ mudam a ordem; a linha
-  "Cadeia" mostra o caminho do som. "Tempo" do delay em 1/8, 1/16... segue o BPM.
-- **Modulação:** cada linha é um cabo. Exemplo: *Fonte* LFO, *Via* Roda mod.,
-  *Destino* Altura = vibrato que aparece quando você gira a roda.
-- **Arp/Harmonia:** ligue o arpejador e segure um acorde. No **Harmonizador**,
-  escolha o intervalo, o tom e a escala da música. "Aplicar em: Só guitarra"
-  deixa o teclado como está; "Tudo" harmoniza qualquer entrada.
-- **Looper:** "Gravar" → toque → "Fechar o loop" → "Gravar por cima"...
-  A tecla **Enter** aperta o botão grande, para não precisar soltar a guitarra.
-
-- **Saída MIDI:** em "Enviar", escolha **Guitarra** (só a nota tocada, com
-  bends) ou **Tudo** (também teclado, harmonia e arpejo). Depois escolha o
-  destino:
-  - **Linux e macOS:** use "Porta virtual \"Sintetizador\"". Ela aparece
-    sozinha como entrada MIDI na DAW.
-  - **Windows:** instale o **loopMIDI** (gratuito), crie uma porta, clique em
-    Atualizar e escolha-a aqui e na DAW.
-
-  Ajuste a faixa de pitch bend do instrumento na DAW para o mesmo valor
-  daqui (padrão 2). Para ouvir só a DAW, deixe a Mistura em "só gtr" ou o
-  Nível do synth em 0.
-
-### 3. Barra de cima
-
-- **Preset:** as setas ‹ › passam de um preset para o outro. Clique no nome
-  para abrir o **navegador**: categorias à esquerda, busca por nome ou som
-  ("delay", "vibrato"...), clique para ouvir e duplo clique ou Enter para
-  fechar. As setas ↑ ↓ do teclado também trocam de preset.
-- **Salvar:** dê um nome, escolha a categoria e aperte Enter. O preset vai para
-  a pasta `presets/` e aparece no navegador. Presets não mudam a entrada, o
-  gate nem o volume geral.
-- **MIDI Learn:** ligue, clique num controle (fica com contorno laranja) e gire
-  um knob do seu controlador; pronto, ele passa a controlar aquele item.
-  Botão direito desfaz. O mapa fica salvo em `midi-learn.txt`.
-- **Gravar WAV:** grava tudo o que sai (sem o metrônomo) em `gravacoes/`.
-- **Pânico:** silencia todas as notas e para o looper.
-
-Pare o mouse em cima de qualquer controle para ver o que ele faz. O programa
-lembra a entrada, os dispositivos, o buffer, o preset e todos os ajustes em
-`configuracoes.ini`.
-
-| | |
-|---|---|
-| ![Navegador de presets](docs/presets.png) | ![Aba Som](docs/som.png) |
-| ![Arpejador e harmonizador](docs/arp-harmonia.png) | ![Looper](docs/looper.png) |
-
-## Organização do código
+## Code layout
 
 ```
 src/
-  main.c        início do programa e opções de linha de comando
-  gui.c         telas, janelas e configurações lembradas
-  ui.c          widgets desenhados à mão (knobs, botões, listas, dicas)
-  audio_asio.c  drivers ASIO no Windows (PortAudio + SDK ASIO)
-  engine.c      motor de áudio: caminho das notas (oitava -> harmonizador ->
-                arpejador -> synth/saída MIDI), mixagem, metrônomo, dispositivos
-  params.c      tabela de todos os parâmetros, presets
-  synth.c       vozes, osciladores, filtro, envelopes, matriz de modulação
-  fx.c          distorção, chorus, phaser, delay, reverb (Freeverb)
-  arp.c         arpejador
-  looper.c      looper com overdub e desfazer
-  pitch.c       detecção de altura (YIN) e seguidor de notas
-  guitar.c      análise da entrada (roda dentro do callback de áudio)
-  gtr_direct.c  modo direto: o synth feito da própria onda da corda
-  midi.c        PortMidi: entrada, saída (guitarra -> MIDI) e MIDI learn
-  recorder.c    gravação WAV
-  queue.h       filas sem trava entre as threads e o áudio
+  main.c        program start, command-line options, data folder
+  gui.c         screens, dialogs and remembered settings
+  ui.c          hand-drawn widgets (knobs, buttons, lists, tooltips)
+  audio_asio.c  ASIO drivers on Windows (PortAudio + ASIO SDK)
+  engine.c      audio engine: note path (octave -> harmonizer ->
+                arpeggiator -> synth/MIDI out), mixing, metronome, devices
+  params.c      table of all parameters, tooltips, presets
+  synth.c       voices, oscillators, filter, envelopes, modulation matrix
+  fx.c          distortion, chorus, phaser, delay, reverb (Freeverb)
+  arp.c         arpeggiator
+  looper.c      looper with overdub and undo
+  pitch.c       pitch detection (YIN) and note tracker
+  guitar.c      guitar input analysis (runs inside the audio callback)
+  gtr_direct.c  Direct mode: the synth made from the string's own waveform
+  midi.c        PortMidi: input, output (guitar -> MIDI) and MIDI learn
+  recorder.c    WAV recording
+  queue.h       lock-free queues between the threads and the audio
 tests/
-  test_dsp.c        testes que rodam sem placa de som
-  test_midi_out.c   bytes da saída MIDI, com um PortMidi falso
+  test_dsp.c        tests that run without a sound card
+  test_midi_out.c   MIDI output bytes, with a fake PortMidi
 ```
 
-Regras que mantêm o som sem estalos:
-- O callback de áudio **nunca espera**: não usa mutex, malloc nem acesso a disco.
-- Os **parâmetros são suavizados** (~30 ms): girar um knob rápido não gera
-  "zíper".
-- **Denormais** (números minúsculos no fim de um reverb, que deixam a CPU
-  até 9x mais lenta) são tratados como zero (FTZ/DAZ).
-- Interface, MIDI e guitarra conversam com ele por **filas sem trava**
-  (`queue.h`) e por **parâmetros atômicos** (`params.c`).
-- A análise da guitarra (YIN incremental) roda dentro do callback, com custo
-  pequeno e igual em todo passo: só entram e saem da conta as amostras novas.
+Rules that keep the sound click-free:
+- The audio callback **never waits**: no mutexes, malloc or disk access.
+- **Parameters are smoothed** (~30 ms): turning a knob fast doesn't "zipper".
+- **Denormals** (tiny numbers at the end of a reverb tail that can make the
+  CPU up to 9x slower) are flushed to zero (FTZ/DAZ).
+- The interface, MIDI and guitar talk to it through **lock-free queues**
+  (`queue.h`) and **atomic parameters** (`params.c`).
+- The guitar analysis (incremental YIN) runs inside the callback at a small,
+  constant cost per step: only the new samples enter and leave the sums.
 
-Para criar um novo parâmetro:
-1. Acrescente o nome em `params.h`.
-2. Descreva-o em `params.c`.
-3. Leia o valor com `param_get()` no ponto do áudio que deve usá-lo.
-4. Escreva a dica dele na tabela `HELP` de `params.c`.
-5. Desenhe o controle com `ui_knob()` ou `ui_param_switch()` em `gui.c`.
+To add a parameter:
+1. Add its name in `params.h`.
+2. Describe it in `params.c`.
+3. Read it with `param_get()` where the audio needs it.
+4. Write its tooltip in the `HELP` table in `params.c`.
+5. Draw the control with `ui_knob()` or `ui_param_switch()` in `gui.c`.
 
-Com isso ele já funciona automaticamente com presets e MIDI learn.
+It then works with presets and MIDI learn automatically.
 
-## Testes
+## Tests
 
 ```sh
 cmake --build build && ./build/test_dsp && ./build/test_midi_out
 ```
 
-Os testes:
-- simulam cordas de guitarra (Karplus-Strong) e conferem as notas detectadas:
-  da afinação drop-D ao Mi agudo, a escala cromática com 5 ruídos diferentes,
-  riffs, saltos de oitava e a mesma nota palhetada várias vezes;
-- verificam que os efeitos não ficam instáveis, nem com todos os botões no máximo;
-- conferem o tempo do arpejador e o overdub/desfazer do looper;
-- testam o harmonizador (incluindo bends) e a sequência enviada para a DAW;
-- medem a suavização dos knobs e o ganho da proteção contra denormais;
-- salvam e carregam presets;
-- medem a latência com um "cabo" simulado da saída na entrada;
-- tocam uma guitarra simulada "suja" (harmônicos desafinados, cordas
-  vibrando por simpatia, zumbido): notas soltas, a mesma nota palhetada
-  várias vezes, frase rápida, vibrato, hammer-on e acordes;
-- conferem o modo direto (som na palhetada, quase nenhuma altura errada com
-  cordas ressoando forte, silêncio entre as notas, acordes válidos);
-- conferem o ataque imediato (som na palhetada, nota certa depois) e que
-  batidas nas cordas sem nota não deixam som preso;
-- geram `demo.wav` com o motor completo.
+The tests:
+- simulate guitar strings (Karplus-Strong) and check the detected notes: from
+  drop-D to the high E, the chromatic scale with 5 kinds of noise, riffs,
+  octave jumps and the same note picked repeatedly;
+- play a "dirty" simulated guitar (slightly inharmonic overtones, strings
+  ringing in sympathy, mains hum): single notes, the same note picked 6 times,
+  a fast phrase, vibrato, hammer-ons and chords; strong hum with a low gate
+  must not create notes, and a high gate must not cut notes short;
+- check Direct mode: sound at the pick, almost no audibly wrong pitch with
+  strings ringing strongly, silence between notes, valid output on chords;
+- check Immediate attack (sound at the pick, right note afterwards) and that
+  hits on the strings without a note don't leave sound hanging;
+- check that the effects stay stable, even with every knob at maximum;
+- check arpeggiator timing and looper overdub/undo;
+- test the harmonizer (including bends) and the sequence sent to the DAW;
+- measure knob smoothing and the gain from denormal protection;
+- save and load presets;
+- measure latency through a simulated cable from the output to the input;
+- render `demo.wav` with the full engine.
 
-Para testar a interface sem placa de som: `./build/synth --null-audio`.
-Para gerar uma captura da tela: `--screenshot tela.png`, com `--tab N`,
-`--mode N` e `--preset N` para escolher o que aparece.
+To try the interface without a sound card: `./build/synth --null-audio`.
+To take a screenshot: `--screenshot screen.png`, with `--tab N`, `--mode N`
+and `--preset N` to choose what shows.
 
-## Licença
+## License
 
-GPLv3 (arquivo `LICENSE`). O suporte a ASIO usa o SDK ASIO da Steinberg na
-opção de licença GPLv3, o que exige que o programa inteiro também seja GPLv3.
-ASIO é marca registrada da Steinberg Media Technologies GmbH.
-A fonte Inter usa a licença SIL Open Font License (`assets/fonts/OFL-Inter.txt`).
+GPLv3 (see `LICENSE`). ASIO support uses the Steinberg ASIO SDK under its
+GPLv3 license option, which requires the whole program to be GPLv3 as well.
+ASIO is a registered trademark of Steinberg Media Technologies GmbH.
+The Inter font is under the SIL Open Font License
+(`assets/fonts/OFL-Inter.txt`).
