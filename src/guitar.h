@@ -41,7 +41,8 @@ typedef struct {
     int           fresh;        /* amostras desde a última palhetada */
     float         prev_db;
     float         db_hist[6];
-    int           pick_hold;    /* o estalo da palhetada anterior ainda está subindo */
+    int           pick_hold;
+    atomic_uint   pick_count;   /* palhetadas detectadas (o modo direto usa) */    /* o estalo da palhetada anterior ainda está subindo */
     int           hf_pos;
     float         window[PITCH_WINDOW + PITCH_HOP]; /* janela + passo novo */
     float         held_hz;    /* frequência da nota que está soando */

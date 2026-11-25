@@ -557,6 +557,86 @@ static void test_real_guitar(void)
     params_init();
 }
 
+/* Modo direto: o synth segue a onda da corda (direct.c) */
+static void test_direct_mode(void)
+{
+    printf("Teste 1d: modo direto (synth segue a onda da corda)\n");
+    static Engine e;
+    int len = SR * 12;
+    float *x = calloc(len, sizeof(float)), *out = calloc(2 * len, sizeof(float)), *mono = calloc(len, sizeof(float));
+    const int notes[] = {40, 43, 45, 47, 50, 52, 55, 57, 59, 62, 64, 67, 69, 72, 76, 79};
+    int starts[16];
+    rg_seed = 100;
+    for (int i = 0; i < 16; i++) {
+        starts[i] = (int)((0.2f + i * 0.65f) * SR);
+        rg_string(x, len, starts[i], notes[i], 0.25f, 0.4f, SR, 0.13f + 0.05f * (i % 3));
+    }
+    rg_background(x, len, SR, 0.002f, 0.012f); /* cordas ressoando forte */
+
+    engine_init(&e, SR);
+    params_init();
+    param_set(P_INPUT_MODE, 2); param_set(P_GTR_DIRECT, 1); param_set(P_GTR_BLEND, 0); param_set(P_REV_ON, 0);
+    param_set(P_OSC_MIX, 0); param_set(P_OSC1_WAVE, 2); param_set(P_CUTOFF, 5000); param_set(P_MOD0_AMT, 0);
+    param_set(P_SUSTAIN, 1); param_set(P_RELEASE, 0.05f);
+    params_smooth_snap();
+    for (int pos = 0; pos + 64 <= len; pos += 64) engine_process(&e, x + pos, 1, out + 2 * pos, 64);
+    for (int i = 0; i < len; i++) mono[i] = out[2 * i];
+    engine_free(&e);
+
+    /* altura ouvida a cada 1,3 ms (últimos 30 ms da saída) */
+    Yin y;
+    yin_init(&y, SR, 1440, 70, 2000, 0.15f);
+    long wrong = 0, tot = 0;
+    double sound_sum = 0;
+    int sounded = 0, finite = 1;
+    for (int k = 0; k < 16; k++) {
+        int s0 = starts[k], sound = -1;
+        for (int t = s0; t < s0 + (int)(0.05f * SR); t++) if (fabsf(mono[t]) > 0.01f) { sound = t; break; }
+        if (sound >= 0) { sounded++; sound_sum += (sound - s0) * 1000.0 / SR; }
+        for (int t = s0 + 64; t < s0 + (int)(0.4f * SR) - 1440; t += 64) {
+            float c, hz = yin_detect(&y, mono + t - 1440 + 1, &c);
+            int ok = hz > 0 && fabsf(69 + 12 * log2f(hz / 440) - notes[k]) < 0.5f;
+            tot++;
+            wrong += hz > 0 && c > 0.8f && !ok;
+        }
+    }
+    for (int i = 0; i < len; i++) if (!isfinite(mono[i])) finite = 0;
+    /* silêncio entre as notas: só ressonância e zumbido, sem palhetada */
+    float quiet = 0;
+    for (int k = 0; k < 15; k++)
+        for (int t = starts[k] + (int)(0.5f * SR); t < starts[k + 1] - 200; t++) {
+            if (getenv("DBG1D") && fabsf(mono[t]) > 0.01f && fabsf(mono[t]) > quiet) printf("    depois da nota %d, aos %.0f ms: %.3f\n", notes[k], (t - starts[k]) * 1000.0 / SR, fabsf(mono[t]));
+            quiet = fmaxf(quiet, fabsf(mono[t]));
+        }
+    yin_free(&y);
+    double wrong_pct = 100.0 * wrong / tot;
+    printf("  som começa em %.1f ms (média, %d/16 notas) | altura errada audível %.1f%% do tempo | entre as notas: pico %.4f\n",
+           sound_sum / (sounded ? sounded : 1), sounded, wrong_pct, quiet);
+    CHECK(sounded == 16 && sound_sum / sounded < 3.0, "o som deveria começar logo na palhetada");
+    CHECK(wrong_pct < 2.0, "altura errada audível demais no modo direto");
+    CHECK(quiet < 0.01f, "ressonância sozinha não deveria fazer som");
+    CHECK(finite, "saída inválida (NaN/inf)");
+
+    /* acordes: viram fuzz, mas o som precisa sair e ser válido */
+    memset(x, 0, len * sizeof(float));
+    const int chord[6] = {40, 47, 52, 56, 59, 64};
+    for (int k = 0; k < 6; k++) rg_string(x, len, (int)(0.1f * SR) + k * (int)(0.012f * SR), chord[k], 0.15f, 1.0f, SR, 0.15f);
+    engine_init(&e, SR);
+    params_init();
+    param_set(P_INPUT_MODE, 2); param_set(P_GTR_DIRECT, 1); param_set(P_GTR_BLEND, 0);
+    params_smooth_snap();
+    float peak = 0;
+    for (int pos = 0; pos + 64 <= SR * 2; pos += 64) {
+        engine_process(&e, x + pos, 1, out, 64);
+        for (int i = 0; i < 128; i++) { if (!isfinite(out[i])) finite = 0; peak = fmaxf(peak, fabsf(out[i])); }
+    }
+    engine_free(&e);
+    printf("  acorde: pico %.2f, saída %s\n", peak, finite ? "válida" : "INVÁLIDA");
+    CHECK(peak > 0.05f && finite, "acorde no modo direto sem som ou inválido");
+    free(x); free(out); free(mono);
+    params_init();
+}
+
 static void test_repick(void)
 {
     printf("Teste 4: mesma nota palhetada de novo gera nova nota\n");
@@ -980,6 +1060,7 @@ int main(void)
     test_octave_jumps();
     test_legato();
     test_real_guitar();
+    test_direct_mode();
     test_fast_attack();
     test_fast_attack_noise();
     test_repick();

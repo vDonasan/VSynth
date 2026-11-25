@@ -104,5 +104,7 @@ int         synth_active_voices(const Synth *s);
 void        synth_onset(Synth *s, int velocity, float guess_note);
 void        synth_onset_cancel(Synth *s); /* palhetada sem nota: solta a provisória */
 const char *waveform_name(Waveform w);
+float       synth_adsr_next(Adsr *e, const AdsrParams *p, float sr);
+float       synth_oscillator(Waveform w, float phase, float dt);
 
 #endif

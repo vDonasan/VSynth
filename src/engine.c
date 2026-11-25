@@ -60,6 +60,8 @@ int engine_init(Engine *e, float sr)
     if (fx_init(&e->fx, sr) < 0) return -1;
     if (looper_init(&e->looper, sr, 60.0f) < 0) return -1;
     if (guitar_init(&e->guitar, sr, &e->q_gtr) < 0) return -1;
+    direct_init(&e->direct, sr);
+    e->direct_on = -1;
     if (fring_init(&e->rec_ring, REC_RING_SIZE) < 0) return -1;
     if (fring_init(&e->rec_gtr_ring, REC_RING_SIZE) < 0) return -1;
     e->audio = calloc(1, sizeof *e->audio);
@@ -275,6 +277,16 @@ static int *harm_slot(Engine *e, const Event *ev)
 
 static void route(Engine *e, Event ev, int arp_on)
 {
+    /* Modo direto: o synth segue a onda da corda (gtr_direct.c); as notas
+       reconhecidas só vão para a saída MIDI, se ela estiver ligada */
+    if (e->direct_on == 1 && (ev.source == SRC_AUDIO || ev.type == EV_ONSET)) {
+        if (ev.type == EV_ONSET || ev.type == EV_PITCH_TRACK) return;
+        if (param_geti(P_MOUT_SRC) != 0 && (ev.type == EV_NOTE_ON || ev.type == EV_NOTE_OFF)) {
+            int nn = ev.note + 12 * param_geti(P_GTR_OCTAVE);
+            if (nn >= 0 && nn <= 127) { ev.note = (uint8_t)nn; midi_out_emit(e, &ev); }
+        }
+        return;
+    }
     if (ev.type == EV_ONSET) {
         /* Ataque imediato: o som começa na palhetada, abafado, na altura da
            última nota; o NOTE_ON que vem em seguida acerta a altura. Com o
@@ -372,6 +384,17 @@ void engine_process(Engine *e, const float *in, int in_channels, float *out, int
     engine_disable_denormals(); /* vale para esta thread; é barato repetir */
     const int   mode   = param_geti(P_INPUT_MODE);
     const int   gtr    = mode == 2 && in != NULL;
+    /* troca entre "notas" e "direto": solta o que estava soando */
+    int dir = param_geti(P_GTR_DIRECT);
+    if (dir != e->direct_on) {
+        if (e->direct_on != -1) {
+            Event off = {EV_ALL_OFF, SRC_AUDIO, 0, 0, 0.0f};
+            synth_handle_event(&e->synth, &off);
+        }
+        direct_reset(&e->direct);
+        e->gtr_pending = 0;
+        e->direct_on = dir;
+    }
     const int   arp_on = param_geti(P_ARP_ON);
     const float bpm    = param_get(P_BPM);
     const float smooth = 1.0f - expf(-(float)ENGINE_CHUNK / (0.03f * e->sr));
@@ -438,6 +461,13 @@ void engine_process(Engine *e, const float *in, int in_channels, float *out, int
         }
         if (arp_on) arp_process(&e->arp, sink_to_synth, e, n, e->sr, bpm);
         synth_render(&e->synth, e->mono, n);
+        if (gtr && e->direct_on == 1 && done < 4096) {
+            int m = done + n <= 4096 ? n : 4096 - done;
+            float hz = atomic_load_explicit(&e->guitar.st_hz, memory_order_relaxed);
+            float hint = hz > 0.0f && e->guitar.tracker.conf >= 0.9f ? hz : 0.0f;
+            direct_process(&e->direct, &e->synth.patch, e->gtr_in + done, e->mono, m,
+                           atomic_load_explicit(&e->guitar.pick_count, memory_order_relaxed), hint);
+        }
         if (recording && gtr) /* esquerda: o que entrou da guitarra, cru; direita: o synth */
             for (int i = 0; i < n && done + i < 4096; i++) {
                 fring_push(&e->rec_gtr_ring, e->gtr_in[done + i]);

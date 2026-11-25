@@ -137,6 +137,25 @@ contar a placa de som):
 | Cordas Mi, Lá e Ré soltas (graves) | 33–39 ms | 19 ms | som em ~1 ms |
 | Da corda Sol para cima | 28–39 ms | 12 ms | som em ~1 ms |
 
+**Modo direto** (painel da guitarra → *Synth: Notas | Direto*): em vez de
+reconhecer a nota e tocá-la, o synth usa a própria onda da corda como fonte do
+som, como os pedais de synth de guitarra (Boss SY). O OSC1 é a onda da corda
+transformada: quadrada (o sinal da onda), seno (a fundamental isolada), serra e
+triângulo (derivados dos cruzamentos). Por isso:
+
+- não há atraso além do buffer de áudio (o som começa em ~1 ms);
+- não existe "nota errada" para o synth pular: com as cordas ressoando, a altura
+  errada audível caiu de ~5% do tempo (modo Notas) para menos de 1%;
+- bends e vibrato vêm junto, sem nada para ajustar;
+- acordes viram um fuzz sintético (como nos synths de guitarra analógicos).
+
+O OSC2 (com a desafinação) e a Oitava precisam do período da nota: entram assim
+que o reconhecimento confirma a nota (~12–19 ms). O som só abre com uma
+palhetada e fecha quando a corda é abafada, então cordas ressoando e zumbido não
+fazem som sozinhos. Filtro, envelopes (disparados pela palhetada), LFO e a
+matriz de modulação funcionam como no synth. MIDI, harmonizador e arpejador
+precisam do modo Notas.
+
 **Ataque imediato** (ligado por padrão, no painel da guitarra): o som começa
 assim que a palhetada é detectada, abafado e na altura da nota anterior, e se
 acerta (abre o filtro e pula para a nota certa) quando a nota é reconhecida.
@@ -254,6 +273,7 @@ src/
   looper.c      looper com overdub e desfazer
   pitch.c       detecção de altura (YIN) e seguidor de notas
   guitar.c      análise da entrada (roda dentro do callback de áudio)
+  gtr_direct.c  modo direto: o synth feito da própria onda da corda
   midi.c        PortMidi: entrada, saída (guitarra -> MIDI) e MIDI learn
   recorder.c    gravação WAV
   queue.h       filas sem trava entre as threads e o áudio
@@ -301,6 +321,8 @@ Os testes:
 - tocam uma guitarra simulada "suja" (harmônicos desafinados, cordas
   vibrando por simpatia, zumbido): notas soltas, a mesma nota palhetada
   várias vezes, frase rápida, vibrato, hammer-on e acordes;
+- conferem o modo direto (som na palhetada, quase nenhuma altura errada com
+  cordas ressoando forte, silêncio entre as notas, acordes válidos);
 - conferem o ataque imediato (som na palhetada, nota certa depois) e que
   batidas nas cordas sem nota não deixam som preso;
 - geram `demo.wav` com o motor completo.

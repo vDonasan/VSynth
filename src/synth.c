@@ -107,6 +107,10 @@ static float oscillator(Waveform w, float t, float dt)
     }
 }
 
+/* Usados também pelo modo direto (gtr_direct.c) */
+float synth_adsr_next(Adsr *e, const AdsrParams *p, float sr) { return adsr_next(e, p, sr); }
+float synth_oscillator(Waveform w, float t, float dt) { return oscillator(w, t, dt); }
+
 /* ------------------------------------------------------------------ */
 /* Gerência de vozes                                                   */
 /* ------------------------------------------------------------------ */

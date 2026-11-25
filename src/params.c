@@ -51,6 +51,7 @@ static const ParamDef DEFS[P_COUNT] = {
     [P_GTR_OCTAVE]  = {"gtr_oitava", "Oitava", -2, 2, 0, K_INT, "", NULL, 0},
     [P_GTR_BENDS]   = {"gtr_bends", "Seguir bends", 0, 1, 1, K_BOOL, "", NULL, 0},
     [P_GTR_FAST]    = {"gtr_ataque_imediato", "Ataque imediato", 0, 1, 1, K_BOOL, "", NULL, F_NOPRESET},
+    [P_GTR_DIRECT]  = {"gtr_modo_direto", "Modo", 0, 1, 0, K_CHOICE, "", "Notas;Direto", F_NOPRESET},
     [P_KEYS_OCTAVE] = {"teclado_oitava", "Oitava", 1, 7, 4, K_INT, "", NULL, F_NOPRESET | F_HIDDEN},
 
     [P_DIST_ON]     = {"dist_ligada", "Distorção", 0, 1, 0, K_BOOL, "", NULL, 0},
@@ -339,6 +340,7 @@ static const char *HELP[P_COUNT] = {
     [P_GTR_BLEND]  = "Quanto do som limpo da guitarra aparece junto com o synth.",
     [P_GTR_OCTAVE] = "Toca o synth oitavas acima ou abaixo do que a guitarra toca.",
     [P_GTR_BENDS]  = "O synth acompanha bends e vibrato da guitarra.",
+    [P_GTR_DIRECT] = "Notas: reconhece cada nota e toca no synth (dá para usar MIDI, harmonizador e arpejador). Direto: o synth segue a onda da corda na hora, sem reconhecer notas: sem atraso e sem nota errada; acordes viram fuzz sintético.",
     [P_GTR_FAST]   = "O som começa já na palhetada, abafado, e a nota se acerta assim que é reconhecida. Bem menos atraso nas cordas graves.",
     [P_DIST_ON]    = "Liga ou desliga a distorção.",
     [P_DIST_DRIVE] = "Quanto saturar. Mais drive = mais sujeira e sustain.",

@@ -77,6 +77,7 @@ void guitar_process_hop(Guitar *g, const float *hop)
     /* o estalo dura alguns passos: conta só o começo dele */
     int hf_jump = hf_db - hf_min > thr && hf_db > g->tracker.off_db - 12.0f && db - db_min > 1.0f;
     g->tracker.pick = hf_jump && !g->pick_hold;
+    if (g->tracker.pick) atomic_fetch_add_explicit(&g->pick_count, 1, memory_order_relaxed);
     g->pick_hold = hf_jump;
 
     /* Quanto da janela de análise já é som depois da palhetada. Uma janela

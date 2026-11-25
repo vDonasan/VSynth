@@ -16,6 +16,7 @@
 #include "arp.h"
 #include "fx.h"
 #include "guitar.h"
+#include "gtr_direct.h"
 #include "looper.h"
 #include "queue.h"
 #include "synth.h"
@@ -67,6 +68,8 @@ typedef struct {
     /* estado do callback */
     int    arp_was_on;
     int    gtr_arp_note;
+    Direct direct;           /* modo direto da guitarra */
+    int    direct_on;        /* modo em uso (-1 = ainda não lido) */
     int    gtr_pending;      /* ataque imediato: nota provisória soando */
     int    gtr_pending_age;  /* amostras desde a palhetada */
     float  gtr_last_note;    /* última nota da guitarra: palpite para a próxima */

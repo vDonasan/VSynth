@@ -939,13 +939,25 @@ static void input_guitar(Gui *g, Rectangle p)
     ui_text_right("0 dB", x + w, y + 34, 10, UI_REGULAR, C_TEXT2);
     ui_tooltip((Rectangle){x, y, w, 46}, "Nível da guitarra. O traço laranja é o gate: notas só começam acima dele.");
 
-    y += 84;
+    y += 80;
     ui_knob(x + w * 0.17f, y, 44, P_GTR_GATE, C_CYAN, "Gate");
     ui_knob(x + w * 0.5f, y, 44, P_GTR_GAIN, C_CYAN, "Ganho");
     ui_knob_bipolar(x + w * 0.83f, y, 44, P_GTR_BLEND, C_CYAN, "Mistura");
     ui_tooltip((Rectangle){x + w * 0.83f - 30, y - 26, 60, 90}, "Mistura o som limpo da guitarra com o synth: à esquerda só synth, à direita só guitarra.");
 
-    y += 66;
+    y += 60;
+    /* Como o synth segue a guitarra: reconhecendo notas ou direto na onda */
+    ui_text("Synth", x, y + 9, 11, UI_REGULAR, C_TEXT2);
+    Rectangle ms = {x + 46, y, w - 46, 30};
+    int dm = param_geti(P_GTR_DIRECT);
+    if (ui_segmented(ms, "Notas;Direto", &dm, C_CYAN, C_CYAN_BG, C_CYAN_HI)) {
+        param_set(P_GTR_DIRECT, (float)dm);
+        set_status(g, dm ? "Modo direto: o synth segue a onda da corda, sem reconhecer notas (sem atraso, sem nota errada)."
+                         : "Modo notas: reconhece cada nota (MIDI, harmonizador e arpejador funcionam).");
+    }
+    ui_tooltip(ms, param_help(P_GTR_DIRECT));
+
+    y += 38;
     ui_text("Oitava", x, y + 8, 11, UI_REGULAR, C_TEXT2);
     Rectangle st = {x + 46, y, 86, 30};
     ui_panel(st, 9, C_CTRL, C_BORDER2);
@@ -953,19 +965,26 @@ static void input_guitar(Gui *g, Rectangle p)
     if (ui_button_icon((Rectangle){st.x + st.width - 28, st.y + 2, 26, 26}, "plus", "Oitava acima")) param_set(P_GTR_OCTAVE, param_get(P_GTR_OCTAVE) + 1);
     snprintf(t, sizeof t, "%+d", param_geti(P_GTR_OCTAVE));
     ui_text_center(param_geti(P_GTR_OCTAVE) ? t : "0", st, 12.5f, UI_SEMIBOLD, C_TEXT);
-    ui_tooltip(st, "Toca o synth uma ou duas oitavas acima ou abaixo da guitarra.");
-    ui_text_right("Seguir bends", x + w - 52, y + 8, 12, UI_REGULAR, C_TEXT);
-    ui_param_switch((Rectangle){x + w - 44, y + 3, 44, 24}, P_GTR_BENDS, C_CYAN);
-    ui_tooltip((Rectangle){x + w - 140, y, 140, 30}, "O synth acompanha bends e vibrato da corda.");
+    ui_tooltip(st, dm ? "Toca o synth uma ou duas oitavas acima ou abaixo da guitarra (no modo direto, entra assim que a nota é confirmada)."
+                      : "Toca o synth uma ou duas oitavas acima ou abaixo da guitarra.");
+    if (!dm) {
+        ui_text_right("Bends", x + w - 52, y + 8, 12, UI_REGULAR, C_TEXT);
+        ui_param_switch((Rectangle){x + w - 44, y + 3, 44, 24}, P_GTR_BENDS, C_CYAN);
+        ui_tooltip((Rectangle){x + w - 110, y, 110, 30}, "O synth acompanha bends e vibrato da corda.");
 
-    y += 38;
-    ui_text("Ataque imediato", x, y + 6, 12, UI_REGULAR, C_TEXT);
-    ui_text(param_geti(P_GTR_FAST) ? "som já na palhetada" : "som quando a nota é reconhecida", x, y + 22, 10.5f,
-            UI_REGULAR, C_TEXT2);
-    ui_param_switch((Rectangle){x + w - 44, y + 6, 44, 24}, P_GTR_FAST, C_CYAN);
-    ui_tooltip((Rectangle){x, y, w - 54, 36}, param_help(P_GTR_FAST));
+        y += 36;
+        ui_text("Ataque imediato", x, y + 4, 12, UI_REGULAR, C_TEXT);
+        ui_text(param_geti(P_GTR_FAST) ? "som já na palhetada" : "som quando a nota é reconhecida", x, y + 20, 10.5f,
+                UI_REGULAR, C_TEXT2);
+        ui_param_switch((Rectangle){x + w - 44, y + 5, 44, 24}, P_GTR_FAST, C_CYAN);
+        ui_tooltip((Rectangle){x, y, w - 54, 34}, param_help(P_GTR_FAST));
+    } else {
+        y += 36;
+        ui_text("Segue a onda da corda na hora:", x, y + 4, 11, UI_REGULAR, C_TEXT2);
+        ui_text("bends e vibrato vêm junto; acorde vira fuzz.", x, y + 19, 11, UI_REGULAR, C_TEXT2);
+    }
 
-    draw_tuner(g, (Rectangle){x, p.y + p.height - 100, w, 88});
+    draw_tuner(g, (Rectangle){x, p.y + p.height - 84, w, 74});
 }
 
 static void input_keys(Gui *g, Rectangle p)
