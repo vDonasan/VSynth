@@ -31,6 +31,9 @@ typedef struct {
     float hp1, hp2, hp3, hp4, hp_coef;  /* ... e passa-altas (tira as cordas mais graves ressoando) */
     float center;             /* Hz em volta do qual a banda está (0 = banda aberta) */
     int   hint_agree;
+    float peak;               /* pico da nota atual (desde a palhetada) */
+    float dcs_x, dcs_y;       /* tira o DC da mistura dos osciladores */
+    float acc_P;              /* subidas somadas desde o último ciclo inteiro da nota */
     float off_time;           /* amostras seguidas com o ciclo longe da nota confirmada */         /* leituras do reconhecimento pedindo outra nota */
     float y_prev;
     float env_y;              /* tamanho da onda filtrada, para a histerese */

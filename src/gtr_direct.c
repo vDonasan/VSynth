@@ -71,6 +71,7 @@ void direct_process(Direct *d, const Patch *p, const float *in, float *out, int 
     d->last_pick = picks;
     if (picked) {
         d->off_time = 0.0f;
+        d->acc_P = 0.0f;
         d->center = 0.0f;
         d->hint_agree = 0;
         d->env_y = 0.0f;
@@ -81,9 +82,20 @@ void direct_process(Direct *d, const Patch *p, const float *in, float *out, int 
        leituras seguidas (uma corda ressoando não arrasta a banda). */
     if (hint_hz > 0.0f) {
         if (d->center <= 0.0f) d->center = hint_hz;
-        else if (fabsf(12.0f * log2f(hint_hz / d->center)) > 1.5f) {
-            if (++d->hint_agree >= 3) { d->center = hint_hz; d->hint_agree = 0; }
-        } else d->hint_agree = 0;
+        else {
+            float hs = 12.0f * log2f(hint_hz / d->center);
+            if (fabsf(hs) > 0.8f) {
+                /* slide/bend: a banda segue a nota (mesma tolerância que o
+                   teste de "ciclo longe da nota", senão a nota é cortada) */
+                if (++d->hint_agree >= 3) { d->center = hint_hz; d->hint_agree = 0; d->off_time = 0.0f; d->acc_P = 0.0f; }
+            } else {
+                /* o reconhecimento confirma a nota: ela continua soando,
+                   mesmo que os cruzamentos da onda estejam bagunçados */
+                d->hint_agree = 0;
+                d->off_time = 0.0f;
+                d->acc_P = 0.0f;
+            }
+        }
     }
     set_band(d);
 
@@ -135,11 +147,16 @@ void direct_process(Direct *d, const Patch *p, const float *in, float *out, int 
             /* Ciclo longe da nota confirmada = outra corda soando (a nota
                acabou). O dobro da frequência não conta: é só o harmônico
                da própria nota cruzando a mais. */
+            /* Numa guitarra de verdade a onda filtrada pode cruzar duas vezes
+               por ciclo (harmônico forte nas cordas graves): soma as subidas
+               até fechar um ciclo da nota antes de julgar. */
             if (d->center > 0.0f && P >= sr / MAX_HZ && P <= sr / MIN_HZ) {
-                float st = 12.0f * log2f(fP / d->center);
-                if (fabsf(st) > 0.8f && fabsf(st - 12.0f) > 0.8f) d->off_time += P;
-                else if (fabsf(st) <= 0.8f) d->off_time = 0.0f;
-            }
+                float Pc = sr / d->center;
+                d->acc_P += P;
+                float st = 12.0f * log2f(d->acc_P / Pc) * -1.0f;
+                if (fabsf(st) <= 0.8f || fabsf(st - 12.0f) <= 0.8f) { d->off_time = 0.0f; d->acc_P = 0.0f; }
+                else if (d->acc_P > 1.12f * Pc) { d->off_time += d->acc_P; d->acc_P = 0.0f; }
+            } else if (d->center > 0.0f && P > sr / MIN_HZ) d->acc_P = 0.0f;
             if (P >= sr / MAX_HZ && P <= sr / MIN_HZ && d->level > gate_off && in_band) {
                 /* ciclo muito mais curto que o anterior pode ser um harmônico
                    passando: só aceita se o próximo confirmar */
@@ -177,8 +194,17 @@ void direct_process(Direct *d, const Patch *p, const float *in, float *out, int 
         }
         if (picked && d->gate) {
             d->aenv.stage = d->fenv.stage = ENV_ATTACK;
-            d->velocity = clampf(d->level * 4.0f, 0.25f, 1.0f);
+            d->peak = d->level;
             picked = 0;
+        }
+        /* Volume relativo à própria nota, não ao nível absoluto da entrada:
+           com uma interface que manda sinal baixo, o modo direto soava muito
+           mais baixo que a mesma nota no teclado. A força (velocity) usa a
+           mesma conta do modo Notas: dB acima do gate. */
+        if (d->level > d->peak) {
+            d->peak = d->level;
+            float db_above = 20.0f * log10f(fmaxf(d->peak, 1e-9f) / gate_on);
+            d->velocity = clampf((40.0f + db_above * 3.0f) / 127.0f, 0.05f, 1.0f);
         }
         float amp_env = synth_adsr_next(&d->aenv, &p->amp_env, sr);
         float fenv    = synth_adsr_next(&d->fenv, &p->filt_env, sr);
@@ -248,6 +274,12 @@ void direct_process(Direct *d, const Patch *p, const float *in, float *out, int 
         float o1 = oct == 0 ? o1_shaped : o1_synced * d->synced;
         float mix = clampf(p->osc_mix + dst[DST_OSC_MIX], 0.0f, 1.0f);
         float s = (1.0f - mix) * o1 + mix * o2 * d->synced;
+        /* a onda moldada (triângulo integrado, quadrada com ciclo irregular)
+           pode ficar fora do zero */
+        float s_dc = s - d->dcs_x + 0.9985f * d->dcs_y;
+        d->dcs_x = s;
+        d->dcs_y = s_dc;
+        s = s_dc;
 
         /* ---- filtro (o mesmo do synth) ---- */
         float fc = clampf(p->cutoff * exp2f(dst[DST_CUTOFF]), 20.0f, sr * 0.45f);
@@ -260,7 +292,7 @@ void direct_process(Direct *d, const Patch *p, const float *in, float *out, int 
         d->ic2 = 2.0f * v2 - d->ic2;
 
         /* volume: envelope × dinâmica da corda (comprimida: a corda cai rápido) */
-        float dyn = sqrtf(clampf(d->level * 3.0f, 0.0f, 2.0f));
+        float dyn = sqrtf(clampf(d->level / fmaxf(d->peak, 1e-9f), 0.0f, 1.0f));
         float gain_out = amp_env * dyn * (0.35f + 0.65f * d->velocity) * clampf(1.0f + dst[DST_AMP], 0.0f, 2.0f);
         out[i] += tanhf(v2 * gain_out * p->volume);
     }
