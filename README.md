@@ -84,8 +84,9 @@ Guitar panel:
 #### Notes mode
 
 Each note is recognized (pitch detection) and played on the synth. Play
-**one note at a time** (detection is monophonic), mute the other strings and
-prefer the neck pickup. A new pick restarts the note; hammer-ons and slides
+**one note at a time** (detection is monophonic). Strings you let ring are
+handled (see below), but muting them still gives the cleanest result; prefer
+the neck pickup. A new pick restarts the note; hammer-ons and slides
 glide to the next note.
 
 Time from pick to sound, measured with a simulated guitar in the tests (not
@@ -122,9 +123,21 @@ To cope with a real guitar, the detector:
   consistent readings;
 - **starts** a note only after an attack (a pick, or sound coming out of
   silence): steady hum and noise never become notes, even with a low gate;
+- **subtracts the strings that are still ringing** (harmonic cancellation):
+  when you pick a new note while earlier ones keep sounding, the detector
+  checks which of them are really still there, removes them from the signal
+  with comb filters tuned to each one, and reads the new note from what is
+  left. A new note that is an octave, fifth or two octaves above a ringing
+  string (which the comb would also remove) is found by which of the old
+  string's harmonics suddenly got louder;
 - **ends** a note only when it is really gone: below the gate, the note keeps
   sounding while the detected pitch still matches it (down to 16 dB lower),
   so a high gate doesn't cut notes short.
+
+With strings left ringing, in random phrases from the test suite, notes
+recognized correctly went from 754 to 1149 out of 2304, and wrong or extra
+notes fell from 594 to 384. Very fast lines over long-ringing strings (under
+0.3 s per note) are still the weak spot.
 
 **Chords:** Notes mode recognizes one note at a time. On a chord it holds a
 single note without jumping around, but that note is not always part of the

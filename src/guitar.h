@@ -45,6 +45,26 @@ typedef struct {
     atomic_uint   pick_count;   /* palhetadas detectadas (o modo direto usa) */    /* o estalo da palhetada anterior ainda está subindo */
     int           hf_pos;
     float         window[PITCH_WINDOW + PITCH_HOP]; /* janela + passo novo */
+
+    /* Cancelamento harmônico (de Cheveigné): notas que continuam soando
+       (cordas deixadas soar) são subtraídas com um filtro em pente
+       y[n] - y[n-P], que zera a nota de período P e todos os harmônicos
+       dela. A nota nova aparece no que sobra. */
+#define GTR_RING_MAX 3
+#define GTR_HIST     8192
+    float         hist[GTR_HIST];   /* sinal filtrado, para os atrasos do pente */
+    unsigned      hist_pos;
+    float         ring_hz[GTR_RING_MAX];   /* notas anteriores ainda soando */
+    int           ring_age[GTR_RING_MAX];  /* amostras desde que foram confirmadas */
+    int           n_ring;
+    float         att_p[GTR_RING_MAX + 1]; /* cancelados nesta palhetada (as que soavam) */
+    int           n_att;
+    unsigned      pick_abs;                /* onde foi a última palhetada (índice absoluto) */
+    int           held_present;            /* a nota atual ainda soava na última palhetada */
+    float         cancel_p[GTR_RING_MAX + 1]; /* períodos sendo cancelados agora */
+    int           n_cancel;
+    float         cwin[PITCH_WINDOW + PITCH_HOP]; /* janela já com o cancelamento */
+    Yin           cyin, cyin_short, cyin_mid;     /* as três análises, no sinal cancelado */
     float         held_hz;    /* frequência da nota que está soando */
     /* lidos pela interface (afinador, medidor) e pelo motor */
     atomic_int    st_note;

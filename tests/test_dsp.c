@@ -429,6 +429,31 @@ static int real_notes(const float *x, int len, char *seq, int cap)
     return ons;
 }
 
+/* Cordas deixadas soar: conta quantas notas saíram certas (uma vez, na sua
+   vez) e quantas a mais ou erradas */
+static void let_ring_case(const char *label, const float *x, int len, const int *starts, const int *notes, int nn, int min_ok, int max_extra)
+{
+    Guitar g; EventQueue q; evq_init(&q);
+    guitar_init(&g, SR, &q); guitar_reset(&g);
+    int got[16] = {0}, ok = 0, extra = 0;
+    char seq[400] = "";
+    for (int pos = 0; pos + PITCH_HOP <= len; pos += PITCH_HOP) {
+        guitar_process_hop(&g, x + pos);
+        Event e;
+        while (evq_pop(&q, &e)) if (e.type == EV_NOTE_ON) {
+            int k = -1;
+            for (int i = 0; i < nn; i++) if (pos >= starts[i] && (i == nn - 1 || pos < starts[i + 1])) k = i;
+            char t[8]; snprintf(t, sizeof t, " %d", e.note);
+            if ((int)(strlen(seq) + strlen(t)) < (int)sizeof seq) strcat(seq, t);
+            if (k >= 0 && e.note == notes[k] && !got[k]) { got[k] = 1; ok++; } else extra++;
+        }
+    }
+    guitar_free(&g);
+    int pass = ok >= min_ok && extra <= max_extra;
+    printf("  %-44s %s  certas %d/%d, a mais %d  notas:%s\n", label, pass ? "ok  " : "ERRO", ok, nn, extra, seq);
+    CHECK(pass, "cordas deixadas soar: notas faltando ou a mais");
+}
+
 static void real_case(const char *label, const float *x, int len, const char *expected)
 {
     char seq[400];
@@ -506,6 +531,24 @@ static void test_real_guitar(void)
     }
     rg_background(x, len, SR, 0.002f, 0.002f);
     real_case("hammer-on (52 -> 54 -> 55 sem palhetar)", x, len, " 52 54 55");
+
+    /* cordas deixadas soar: as notas anteriores continuam vibrando por baixo
+       da nova (o caso da gravação real). Cada nota tem que sair uma vez, sem
+       "sambar" entre a nova e as que ainda soam. */
+    {
+        const int open[6] = {40, 45, 50, 55, 59, 64};
+        const int arp[12] = {40, 47, 52, 55, 59, 64, 45, 52, 57, 60, 64, 69};
+        int st[12];
+        memset(x, 0, len * sizeof(float));
+        rg_seed = 3;
+        for (int i = 0; i < 6; i++) { st[i] = (int)((0.3f + i * 1.1f) * SR); rg_string(x, len, st[i], open[i], 0.22f * (0.7f + 0.3f * (i % 2)), 3.0f, SR, 0.15f); }
+        rg_background(x, len, SR, 0.001f, 0.0f);
+        let_ring_case("6 cordas soltas deixando soar", x, len, st, open, 6, 6, 0);
+        memset(x, 0, len * sizeof(float));
+        for (int i = 0; i < 12; i++) { st[i] = (int)((0.3f + i * 0.45f) * SR); rg_string(x, len, st[i], arp[i], 0.2f * (0.7f + 0.3f * (i % 2)), 2.5f, SR, 0.15f); }
+        rg_background(x, len, SR, 0.001f, 0.0f);
+        let_ring_case("arpejo deixando soar (0,45 s por nota)", x, len, st, arp, 12, 10, 1);
+    }
 
     /* zumbido forte acima do gate (gate baixo): sem ataque, não vira nota */
     memset(x, 0, len * sizeof(float));
