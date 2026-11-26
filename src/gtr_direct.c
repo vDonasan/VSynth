@@ -80,6 +80,7 @@ void direct_process(Direct *d, const Patch *p, const float *in, float *out, int 
     /* O reconhecimento (YIN) diz qual é a nota: a banda se fecha em volta
        dela. Uma nota diferente da banda atual só muda a banda depois de 3
        leituras seguidas (uma corda ressoando não arrasta a banda). */
+    if (hint_hz > 0.0f) d->unconfirmed = 0.0f;
     if (hint_hz > 0.0f) {
         if (d->center <= 0.0f) d->center = hint_hz;
         else {
@@ -181,10 +182,15 @@ void direct_process(Direct *d, const Patch *p, const float *in, float *out, int 
         d->low = d->level < d->low ? d->level : d->low + (d->level - d->low) * low_coef;
         int crossed = d->level > gate_on && d->prev_level <= gate_on && d->low < gate_off;
         d->prev_level = d->level;
+        if (d->gate) d->unconfirmed += 1.0f;
         if (!d->gate && d->level > gate_on && (picked || crossed)) {
             d->gate = 1;
+            d->unconfirmed = 0.0f;
             picked = 1;
         } else if (d->gate && (d->level < gate_off || (d->center > 0.0f && d->env_y < 0.5f * gate_off) ||
+                               /* zumbido/ruído acima do gate: abriu mas nenhuma nota
+                                  foi reconhecida; não fica tocando o zumbido */
+                               d->unconfirmed > 0.15f * sr ||
                                d->off_time > 0.030f * sr || (d->ref > gate_on && d->fast < 0.12f * d->ref))) {
             /* a nota acabou quando o ciclo medido fica 30 ms longe dela */
             /* com a nota confirmada, conta só o som dentro da banda dela:
