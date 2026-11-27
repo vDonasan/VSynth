@@ -2,6 +2,7 @@
 #include "params.h"
 
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define PI_F     3.14159265358979f
@@ -149,6 +150,8 @@ static void voice_start(Synth *s, Voice *v, int note, float exact_note, float ve
     v->pending     = 0;
     v->damp        = 0.0f;
     v->kill        = 0.0f;
+    v->t_on        = 0;
+    v->fast_glide  = 0;
     if (!was_active) {
         v->phase1 = v->phase2 = 0.0f;
         v->ic1eq = v->ic2eq = 0.0f;
@@ -175,6 +178,9 @@ static void note_on(Synth *s, const Event *e)
             return;
         }
         if (v) {
+            /* meio tom logo no começo da nota: é a mesma nota sendo corrigida
+               pelo detector, desliza rápido (8 ms) mesmo sem glide */
+            if (abs(e->note - v->note) == 1 && v->t_on < (unsigned)(0.1f * s->sr)) v->fast_glide = 1;
             v->note        = e->note;
             v->target_freq = midi_to_hz(exact);
             return;
@@ -323,6 +329,7 @@ void synth_render(Synth *s, float *out, int frames)
     const Patch *p  = &s->patch;
     const float  sr = s->sr;
     const float glide_coef = p->glide > 0.0f ? 1.0f - expf(-1.0f / (p->glide * sr)) : 1.0f;
+    const float fast_glide_coef = 1.0f - expf(-1.0f / (0.008f * sr));
     const float level_coef = 1.0f - expf(-1.0f / (0.015f * sr));
     const float detune_mul = exp2f(p->osc2_detune / 12.0f);
     const float k = 2.0f - 1.95f * p->resonance; /* amortecimento do filtro */
@@ -355,7 +362,13 @@ void synth_render(Synth *s, float *out, int frames)
             }
 
             /* Osciladores */
-            v->freq += (v->target_freq - v->freq) * ((v->source == SRC_AUDIO || v->source == SRC_HARM) ? glide_coef : 1.0f);
+            float gc = (v->source == SRC_AUDIO || v->source == SRC_HARM) ? glide_coef : 1.0f;
+            if (v->fast_glide) {
+                gc = fast_glide_coef;
+                if (fabsf(v->target_freq - v->freq) < 0.001f * v->target_freq) v->fast_glide = 0;
+            }
+            v->freq += (v->target_freq - v->freq) * gc;
+            v->t_on++;
             float f1  = v->freq * exp2f((s->pitch_bend + dst[DST_PITCH]) / 12.0f);
             float dt1 = fminf(f1 / sr, 0.5f);
             float dt2 = fminf(f1 * detune_mul / sr, 0.5f);

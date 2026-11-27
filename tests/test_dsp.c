@@ -1127,6 +1127,59 @@ static void test_gate_calibration(void)
     }
 }
 
+/* Nota que chega de meio tom abaixo (slide curto, palhetada forte): o
+   tempo na nota errada tem que ser curto, e a nota final, a certa */
+static void test_scoop(void)
+{
+    printf("Teste 3f: nota chegando de meio tom abaixo\n");
+    params_init();
+    const int notes[8] = {45, 50, 52, 55, 57, 59, 62, 64};
+    int len = (int)(8 * 0.6f * SR) + SR;
+    float *x = calloc(len, sizeof(float));
+    rg_seed = 5;
+    for (int k = 0; k < 8; k++) {
+        int st = (int)((0.3f + k * 0.6f) * SR), dur = (int)(0.5f * SR);
+        float ph[12] = {0};
+        for (int i = 0; i < dur && st + i < len; i++) {
+            float t = i / (float)SR;
+            float m = notes[k] - 0.8f * expf(-t / 0.015f); /* chega em ~40 ms */
+            float f0 = 440.0f * exp2f((m - 69.0f) / 12.0f), env = expf(-2.5f * t) * (i < 48 ? i / 48.0f : 1.0f);
+            for (int h = 1; h <= 10; h++) {
+                ph[h] += 6.2831853f * f0 * h / SR;
+                x[st + i] += 0.2f * env * sinf(ph[h]) / h;
+            }
+            if (i < 200) x[st + i] += 0.1f * rg_rand() * (1.0f - i / 200.0f);
+        }
+    }
+    Guitar g; EventQueue q; evq_init(&q);
+    guitar_init(&g, SR, &q); guitar_reset(&g);
+    int k = -1, ok = 0; float wrong_ms = 0, worst = 0; int first_pos = -1, cur = -1;
+    for (int pos = 0; pos + PITCH_HOP <= len; pos += PITCH_HOP) {
+        int kk = (int)((pos / (float)SR - 0.3f) / 0.6f);
+        if (kk != k) {
+            if (k >= 0 && cur == notes[k]) ok++;
+            k = kk; first_pos = -1; cur = -1;
+        }
+        guitar_process_hop(&g, x + pos);
+        Event e;
+        while (evq_pop(&q, &e)) if (e.type == EV_NOTE_ON && k >= 0 && k < 8) {
+            if (first_pos < 0) first_pos = pos;
+            if (e.note == notes[k] && cur != notes[k] && first_pos >= 0) {
+                float w = (pos - first_pos) * 1000.0f / SR;
+                wrong_ms += w;
+                if (w > worst) worst = w;
+            }
+            cur = e.note;
+        }
+    }
+    if (k >= 0 && k < 8 && cur == notes[k]) ok++;
+    guitar_free(&g);
+    free(x);
+    printf("  nota final certa: %d/8 | tempo na nota errada: média %.1f ms, pior %.1f ms\n", ok, wrong_ms / 8, worst);
+    CHECK(ok == 8, "nota final errada depois de chegar de meio tom abaixo");
+    CHECK(worst <= 25.0f, "nota errada por tempo demais no começo");
+}
+
 int main(void)
 {
     params_init();
@@ -1142,6 +1195,7 @@ int main(void)
     test_fast_attack();
     test_fast_attack_noise();
     test_repick();
+    test_scoop();
     test_fx();
     test_smoothing();
     test_denormals();

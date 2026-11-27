@@ -79,6 +79,8 @@ typedef struct {
     int      pending;         /* guitarra: começou na palhetada, nota ainda não confirmada */
     float    damp;            /* 1 = abafada (nota provisória) ... 0 = normal */
     float    kill;            /* > 0: sumindo rápido (palhetada que não virou nota) */
+    unsigned t_on;            /* amostras desde que a voz começou */
+    int      fast_glide;      /* guitarra: correção de meio tom logo no começo, desliza rápido */
 } Voice;
 
 typedef struct {

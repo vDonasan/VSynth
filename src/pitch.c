@@ -150,6 +150,8 @@ void tracker_init(NoteTracker *t, float on_db, float hysteresis_db)
     t->last_db       = -120.0f;
     t->attack_pending = 0;
     t->since_on       = 1000;
+    t->picked_on      = 0;
+    t->fix_hops       = 60;
     t->refractory     = 0;
     t->pend_hops      = 0;
     t->settle         = 0;
@@ -174,6 +176,7 @@ void tracker_set_hop(NoteTracker *t, int hop)
     int s = 128 / hop;
     t->hop_scale = s < 1 ? 1 : (s > 7 ? 7 : s);
     /* 20 ms de leituras iguais para trocar de nota sem palhetada (48 kHz) */
+    t->fix_hops      = (int)(80.0f / 1000.0f * 48000.0f / hop + 0.5f);
     t->legato_needed = (int)(PITCH_LEGATO_MS / 1000.0f * 48000.0f / hop + 0.5f);
     if (t->legato_needed < 2) t->legato_needed = 2;
     t->start_window = (int)(PITCH_START_MS / 1000.0f * 48000.0f / hop + 0.5f);
@@ -282,7 +285,14 @@ int tracker_process(NoteTracker *t, float hz, float db, Event *out, int max)
     /* Margem: a corda começa um pouco aguda e vai assentando, e a afinação
        nunca é perfeita. Uma leitura a menos de 0,7 semitom da nota que está
        soando (ou da última, numa palhetada nova) conta como ela. */
-    if (t->current >= 0 && fabsf(midi - t->current) < 0.7f) note = t->current;
+    /* Começo de nota palhetada (~80 ms): a corda às vezes chega na nota
+       vindo de meio tom abaixo/acima (slide, palhetada forte). Uma mudança
+       de 1 semitom aí é a MESMA nota sendo corrigida: troca assim que a
+       leitura fica mais perto da vizinha, e o synth desliza sem atacar de
+       novo, em vez de soar uma nota errada por 30-50 ms. */
+    int fixing = t->current >= 0 && !t->attack_pending && t->picked_on && t->since_on <= t->fix_hops;
+    if (t->current >= 0 && fabsf(midi - t->current) < (fixing ? 0.5f : 0.7f)) note = t->current;
+    int fix = fixing && abs(note - t->current) == 1;
 
     if (note == t->current && !t->attack_pending) {
         out[n++] = mk(EV_PITCH_TRACK, note, 0, midi); /* bends e vibrato */
@@ -298,7 +308,7 @@ int tracker_process(NoteTracker *t, float hz, float db, Event *out, int max)
     /* Mudança sem palhetada (legato) perto do ruído: no fim de uma nota o
        chiado gera leituras aleatórias. Só aceita com sinal bem acima do
        gate e leitura confiável; senão mantém a nota até ela terminar. */
-    if (t->current >= 0 && !t->attack_pending && note != t->current &&
+    if (t->current >= 0 && !t->attack_pending && note != t->current && !fix &&
         (db < t->on_db + 6.0f || (t->conf > 0 && t->conf < 0.88f))) {
         t->cand_count = 0;
         return n;
@@ -324,13 +334,16 @@ int tracker_process(NoteTracker *t, float hz, float db, Event *out, int max)
         needed = t->legato_needed;
         if (jump == 12 || jump == 19 || jump == 24 || jump == 28 || jump == 31 || jump == -12 || jump == -19 || jump == -24)
             needed = t->stable_needed * 8 * t->hop_scale;
+        if (fix) needed = 2;
     } else if (t->fast_conf > 0 && t->conf >= t->fast_conf) needed = 1; /* palhetada, leitura muito limpa */
 
     if (t->cand_count >= needed) {
         /* Com palhetada: solta a anterior e ataca de novo.
            Sem palhetada (hammer-on, slide): o sintetizador faz legato. */
+        int with_pick = t->current < 0 || t->attack_pending;
         if (t->current >= 0 && t->attack_pending) out[n++] = mk(EV_NOTE_OFF, t->current, 0, 0.0f);
         out[n++] = mk(EV_NOTE_ON, note, db_to_velocity(t, db), midi);
+        t->picked_on = with_pick; /* uma correção não abre outra */
         t->since_on       = 0;
         t->current        = note;
         t->cand_count     = 0;

@@ -48,6 +48,8 @@ typedef struct {
     float last_db;
     int   attack_pending; /* palhetada detectada, aguardando a altura */
     int   since_on;       /* análises desde o último NOTE_ON */
+    int   picked_on;      /* a nota atual começou com palhetada (pode ser corrigida logo no começo) */
+    int   fix_hops;       /* janela de correção depois da palhetada (~80 ms) */
     int   refractory;     /* análises em que um novo ataque é ignorado */
     int   pend_hops;      /* análises desde a palhetada */
     int   settle;         /* até a janela se renovar, a nota antiga não vale */
