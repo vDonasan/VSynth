@@ -55,7 +55,7 @@ jobs:
               *.zip) unzip -o -q "$f" ;;
             esac
           done
-          for f in $(find . -type f -name '*.tar.gz' -newer . 2>/dev/null); do tar xzf "$f"; done
+          for f in $(find . -type f -name '*.tar.gz'); do tar xzf "$f"; done
           find . -type f | head -20
           V=$(find . -type f -iname 'clap-validator*' ! -name '*.tar.gz' ! -name '*.zip' | head -1)
           chmod +x "$V"
