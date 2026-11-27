@@ -1243,6 +1243,57 @@ static void test_drift(void)
     }
 }
 
+/* Modo Direto com harmonizador e arpejador: a corda continua sendo a voz
+   principal (nenhuma voz do synth com a nota da guitarra), a harmonia sai
+   do synth; com o arpejador, ele toca e a voz direta fica quieta */
+static void test_direct_harm_arp(void)
+{
+    printf("Teste 1f: modo Direto com harmonizador e arpejador\n");
+    for (int mode = 0; mode < 2; mode++) {
+        static Engine e;
+        engine_init(&e, SR);
+        params_init();
+        param_set(P_INPUT_MODE, 2);
+        param_set(P_GTR_DIRECT, 1);
+        param_set(P_GTR_BLEND, 0);
+        if (mode == 0) param_set(P_HARM_ON, 1);
+        else { param_set(P_ARP_ON, 1); param_set(P_HARM_ON, 0); }
+        params_smooth_snap();
+        int len = (int)(1.2f * SR);
+        float *x = calloc(len, sizeof(float)), out[128];
+        rg_seed = 9;
+        rg_string(x, len, (int)(0.1f * SR), 52, 0.25f, 1.0f, SR, 0.15f);
+        int harm_v = 0, audio_v = 0, arp_v = 0;
+        double direct_e = 0;
+        for (int h = 0; h + 64 <= len; h += 64) {
+            engine_process(&e, x + h, 1, out, 64);
+            if (h > (int)(0.4f * SR) && h < (int)(0.9f * SR)) {
+                for (int i = 0; i < MAX_VOICES; i++) {
+                    const Voice *v = &e.synth.voices[i];
+                    if (!v->active || v->amp_env.stage == ENV_RELEASE) continue;
+                    if (v->source == SRC_HARM) harm_v++;
+                    else if (v->source == SRC_AUDIO) audio_v++;
+                    else arp_v++;
+                }
+                direct_e += e.direct.gate;
+            }
+        }
+        engine_free(&e);
+        free(x);
+        if (mode == 0) {
+            int pass = harm_v > 0 && audio_v == 0 && direct_e > 0;
+            printf("  harmonizador: vozes de harmonia %s, voz da guitarra no synth %s, corda tocando %s  %s\n",
+                   harm_v ? "sim" : "não", audio_v ? "sim" : "não", direct_e > 0 ? "sim" : "não", pass ? "ok" : "ERRO");
+            CHECK(pass, "Direto + harmonizador: a harmonia não saiu ou a nota foi dobrada");
+        } else {
+            int pass = (arp_v + audio_v) > 0 && direct_e == 0;
+            printf("  arpejador: notas do arpejador %s, voz direta quieta %s  %s\n",
+                   (arp_v + audio_v) ? "sim" : "não", direct_e == 0 ? "sim" : "não", pass ? "ok" : "ERRO");
+            CHECK(pass, "Direto + arpejador: o arpejador não tocou ou a corda tocou junto");
+        }
+    }
+}
+
 int main(void)
 {
     params_init();
@@ -1254,6 +1305,7 @@ int main(void)
     test_legato();
     test_real_guitar();
     test_direct_mode();
+    test_direct_harm_arp();
     test_gate_calibration();
     test_drift();
     test_fast_attack();

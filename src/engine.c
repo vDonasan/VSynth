@@ -286,16 +286,29 @@ static int *harm_slot(Engine *e, const Event *ev)
 
 static void route(Engine *e, Event ev, int arp_on)
 {
-    /* Modo direto: o synth segue a onda da corda (gtr_direct.c); as notas
-       reconhecidas só vão para a saída MIDI, se ela estiver ligada */
-    if (e->direct_on == 1 && (ev.source == SRC_AUDIO || ev.type == EV_ONSET)) {
-        if (ev.type == EV_ONSET || ev.type == EV_PITCH_TRACK) return;
-        if (param_geti(P_MOUT_SRC) != 0 && (ev.type == EV_NOTE_ON || ev.type == EV_NOTE_OFF)) {
-            int nn = ev.note + 12 * param_geti(P_GTR_OCTAVE);
-            if (nn >= 0 && nn <= 127) { ev.note = (uint8_t)nn; midi_out_emit(e, &ev); }
+    /* Modo direto: a voz principal é a própria corda (gtr_direct.c). As
+       notas reconhecidas vão para a saída MIDI, para o harmonizador (as
+       vozes da harmonia saem do synth, junto com a corda) e, com o
+       arpejador ligado, para ele (aí quem toca é o arpejador e a voz
+       direta fica quieta). */
+    int direct = e->direct_on == 1 && (ev.source == SRC_AUDIO || ev.type == EV_ONSET);
+    if (direct) {
+        if (ev.type == EV_ONSET) return;
+        if (!arp_on && !param_geti(P_HARM_ON)) {
+            if (param_geti(P_MOUT_SRC) != 0 && ev.type != EV_ALL_OFF) {
+                int nn = ev.note + 12 * param_geti(P_GTR_OCTAVE);
+                if (nn >= 0 && nn <= 127 && (ev.type != EV_PITCH_TRACK || param_geti(P_GTR_BENDS))) {
+                    ev.value += (float)(nn - ev.note);
+                    ev.note = (uint8_t)nn;
+                    midi_out_emit(e, &ev);
+                }
+            }
+            return;
         }
-        return;
     }
+    /* a nota da guitarra em si vai para o synth? (no Direto, só se o
+       arpejador estiver tocando por ela) */
+    int root = !direct || arp_on;
     if (ev.type == EV_ONSET) {
         /* Ataque imediato: o som começa na palhetada, abafado, na altura da
            última nota; o NOTE_ON que vem em seguida acerta a altura. Com o
@@ -317,7 +330,7 @@ static void route(Engine *e, Event ev, int arp_on)
         if (ev.type == EV_PITCH_TRACK && !param_geti(P_GTR_BENDS)) return;
         if (!param_geti(P_GTR_BENDS) && ev.type == EV_NOTE_ON) ev.value = (float)ev.note;
         if (ev.type == EV_NOTE_ON) { e->gtr_last_note = ev.value; e->gtr_pending = 0; }
-        if (param_geti(P_MOUT_SRC) == 1) midi_out_emit(e, &ev);
+        if (param_geti(P_MOUT_SRC) == 1 || (direct && param_geti(P_MOUT_SRC) != 0)) midi_out_emit(e, &ev);
     }
 
     int *slot = harm_slot(e, &ev);
@@ -332,7 +345,7 @@ static void route(Engine *e, Event ev, int arp_on)
     }
     if (is_on) {
         if (slot) harm_release(e, slot, arp_on); /* legato da guitarra / mesma tecla de novo */
-        deliver(e, ev, arp_on);
+        if (root) deliver(e, ev, arp_on);
         int want = param_geti(P_HARM_ON) && slot && (param_geti(P_HARM_SRC) == 1 || ev.source == SRC_AUDIO);
         if (want) {
             int hs[2], n = engine_harmony_notes(ev.note, hs);
@@ -347,12 +360,12 @@ static void route(Engine *e, Event ev, int arp_on)
         return;
     }
     if (is_off) {
-        deliver(e, ev, arp_on);
+        if (root) deliver(e, ev, arp_on);
         if (slot) harm_release(e, slot, arp_on);
         return;
     }
     if (ev.type == EV_PITCH_TRACK && slot) {
-        deliver(e, ev, arp_on);
+        if (root) deliver(e, ev, arp_on);
         float bend = ev.value - (float)ev.note;
         for (int i = 0; i < 2; i++) {
             if (slot[i] < 0) continue;
@@ -361,7 +374,7 @@ static void route(Engine *e, Event ev, int arp_on)
         }
         return;
     }
-    deliver(e, ev, arp_on);
+    if (root) deliver(e, ev, arp_on);
 }
 
 static void metronome(Engine *e, float *l, float *r, int n, float bpm, float master)
@@ -470,7 +483,7 @@ void engine_process(Engine *e, const float *in, int in_channels, float *out, int
         }
         if (arp_on) arp_process(&e->arp, sink_to_synth, e, n, e->sr, bpm);
         synth_render(&e->synth, e->mono, n);
-        if (gtr && e->direct_on == 1 && done < 4096) {
+        if (gtr && e->direct_on == 1 && !arp_on && done < 4096) {
             int m = done + n <= 4096 ? n : 4096 - done;
             /* a nota que o detector de notas confirmou (o mesmo do modo
                Notas); logo depois da palhetada, até ele confirmar a nova,

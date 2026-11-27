@@ -961,8 +961,8 @@ static void input_guitar(Gui *g, Rectangle p)
     int dm = param_geti(P_GTR_DIRECT);
     if (ui_segmented(ms, "Notas;Direto", &dm, C_CYAN, C_CYAN_BG, C_CYAN_HI)) {
         param_set(P_GTR_DIRECT, (float)dm);
-        set_status(g, dm ? "Modo direto: o synth segue a onda da corda, sem reconhecer notas (sem atraso, sem nota errada)."
-                         : "Modo notas: reconhece cada nota (MIDI, harmonizador e arpejador funcionam).");
+        set_status(g, dm ? "Modo direto: o som sai da própria corda, sem atraso. MIDI e harmonizador funcionam; com o arpejador, ele toca no lugar da corda."
+                         : "Modo notas: reconhece cada nota e o synth a toca (MIDI, harmonizador e arpejador funcionam).");
     }
     ui_tooltip(ms, param_help(P_GTR_DIRECT));
 
