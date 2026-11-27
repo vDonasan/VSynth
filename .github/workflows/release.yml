@@ -48,8 +48,17 @@ jobs:
         run: |
           mkdir -p cv && cd cv
           gh release download -R free-audio/clap-validator --pattern '*inux*' --pattern '*buntu*' || exit 0
-          for f in *.tar.gz *.zip; do [ -f "$f" ] && (tar xzf "$f" 2>/dev/null || unzip -o -q "$f"); done
-          V=$(find . -type f -name 'clap-validator' | head -1); chmod +x "$V"
+          ls -la
+          for f in *; do
+            case "$f" in
+              *.tar.gz|*.tgz) tar xzf "$f" ;;
+              *.zip) unzip -o -q "$f" ;;
+            esac
+          done
+          for f in $(find . -type f -name '*.tar.gz' -newer . 2>/dev/null); do tar xzf "$f"; done
+          find . -type f | head -20
+          V=$(find . -type f -iname 'clap-validator*' ! -name '*.tar.gz' ! -name '*.zip' | head -1)
+          chmod +x "$V"
           "$V" validate ../build/VirtualSynth.clap
       - name: Empacotar
         run: |
