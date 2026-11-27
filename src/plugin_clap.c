@@ -392,11 +392,14 @@ static bool pa_to_text(const clap_plugin_t *pl, clap_id id, double value, char *
     snprintf(buf, size, "%s", tmp);
     return true;
 }
+/* o contrário de param_format: entende todas as unidades que ele escreve
+   ("1.2 kHz", "350 ms", "1.50 s", "35%", "40% gtr", "só synth", "ligado") */
 static bool pa_from_text(const clap_plugin_t *pl, clap_id id, const char *text, double *v)
 {
     (void)pl;
-    if (id >= P_COUNT) return false;
+    if (id >= P_COUNT || !text) return false;
     const ParamDef *d = param_def((int)id);
+    while (*text == ' ') text++;
     if (d->kind == K_CHOICE && d->choices) {
         const char *c = d->choices;
         for (int i = 0; *c; i++) {
@@ -406,10 +409,23 @@ static bool pa_from_text(const clap_plugin_t *pl, clap_id id, const char *text, 
             if (*c == ';') c++;
         }
     }
+    if (d->kind == K_BOOL) {
+        if (!strcmp(text, "ligado") || !strcmp(text, "on")) { *v = 1; return true; }
+        if (!strcmp(text, "desligado") || !strcmp(text, "off")) { *v = 0; return true; }
+    }
+    if (!strcmp(d->unit, "mix")) {
+        if (!strncmp(text, "só synth", 9)) { *v = 0; return true; }
+        if (!strncmp(text, "só gtr", 7)) { *v = 1; return true; }
+    }
     char *end;
     double x = strtod(text, &end);
     if (end == text) return false;
-    if (d->unit && strcmp(d->unit, "%") == 0) x /= 100.0;
+    while (*end == ' ') end++;
+    if (!strncmp(end, "kHz", 3)) x *= 1000.0;
+    else if (!strncmp(end, "ms", 2) && !strcmp(d->unit, "s")) x /= 1000.0;
+    else if (*end == '%') x /= 100.0;
+    if (x < d->min) x = d->min;
+    if (x > d->max) x = d->max;
     *v = x;
     return true;
 }
@@ -426,21 +442,28 @@ static void pa_flush(const clap_plugin_t *pl, const clap_input_events_t *in, con
 }
 static const clap_plugin_params_t s_params = {pa_count, pa_info, pa_value, pa_to_text, pa_from_text, pa_flush};
 
-/* estado do projeto: "chave = valor" de todos os parâmetros */
+/* estado do projeto: uma linha de identificação e "chave = valor" de todos
+   os parâmetros */
+#define STATE_HEADER "# VirtualSynth state 1\n"
+static bool write_all(const clap_ostream_t *s, const char *b, int n)
+{
+    while (n > 0) {
+        int64_t w = s->write(s, b, (uint64_t)n);
+        if (w <= 0) return false;
+        b += w;
+        n -= (int)w;
+    }
+    return true;
+}
 static bool st_save(const clap_plugin_t *pl, const clap_ostream_t *s)
 {
     Inst *p = pl->plugin_data;
     char line[160];
+    if (!write_all(s, STATE_HEADER, (int)strlen(STATE_HEADER))) return false;
     for (int i = 0; i < P_COUNT; i++) {
         int n = snprintf(line, sizeof line, "%s = %.9g\n", param_def(i)->key,
                          (double)atomic_load_explicit(&p->ps.values[i], memory_order_relaxed));
-        const char *b = line;
-        while (n > 0) {
-            int64_t w = s->write(s, b, (uint64_t)n);
-            if (w <= 0) return false;
-            b += w;
-            n -= (int)w;
-        }
+        if (!write_all(s, line, n)) return false;
     }
     return true;
 }
@@ -458,19 +481,25 @@ static bool st_load(const clap_plugin_t *pl, const clap_istream_t *s)
         len += (size_t)r;
     }
     buf[len] = 0;
+    /* vazio ou não é um estado nosso: recusa sem mexer em nada */
+    if (strncmp(buf, STATE_HEADER, strlen(STATE_HEADER)) != 0) { free(buf); return false; }
     ParamSet *old = params_bind(&p->ps);
-    for (char *line = strtok(buf, "\n"); line; line = strtok(NULL, "\n")) {
+    int got = 0;
+    for (char *line = strtok(buf + strlen(STATE_HEADER), "\n"); line; line = strtok(NULL, "\n")) {
         char *eq = strchr(line, '=');
         if (!eq) continue;
         *eq = 0;
         char *k = line, *e = eq;
         while (e > k && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\r')) *--e = 0;
         while (*k == ' ') k++;
-        params_read_line(k, eq + 1);
+        got += params_read_line(k, eq + 1);
     }
     params_bind(old);
     free(buf);
-    return true;
+    /* os valores mudaram: o host atualiza os controles */
+    const clap_host_params_t *hp = p->host ? p->host->get_extension(p->host, CLAP_EXT_PARAMS) : NULL;
+    if (hp && hp->rescan) hp->rescan(p->host, CLAP_PARAM_RESCAN_VALUES);
+    return got > 0;
 }
 static const clap_plugin_state_t s_state = {st_save, st_load};
 

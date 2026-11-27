@@ -183,6 +183,31 @@ int main(int argc, char **argv)
     printf("  texto: 1200 -> \"%s\"\n", txt);
     CHECK(strlen(txt) > 0, "value_to_text vazio");
 
+    /* 4b. texto -> valor -> texto igual para todos os parâmetros (como o
+       clap-validator confere) */
+    int bad_rt = 0;
+    for (uint32_t i = 0; i < pa->count(a); i++) {
+        clap_param_info_t inf;
+        pa->get_info(a, i, &inf);
+        for (int k = 0; k <= 10; k++) {
+            double x = inf.min_value + (inf.max_value - inf.min_value) * k / 10.0, y;
+            char t1[64], t2[64];
+            if (!pa->value_to_text(a, inf.id, x, t1, sizeof t1) || !pa->text_to_value(a, inf.id, t1, &y) ||
+                !pa->value_to_text(a, inf.id, y, t2, sizeof t2) || strcmp(t1, t2) != 0) {
+                if (bad_rt++ < 5) printf("  ida e volta: %s %.4g -> \"%s\" -> %.4g -> \"%s\"\n", inf.name, x, t1, y, t2);
+            }
+        }
+    }
+    printf("  texto ida e volta: %d problema(s)\n", bad_rt);
+    CHECK(bad_rt == 0, "texto <-> valor não volta igual");
+
+    /* 4c. estado vazio ou lixo: recusa */
+    static Mem empty_m, junk_m;
+    clap_istream_t ie = {&empty_m, ms_read}, ij = {&junk_m, ms_read};
+    memcpy(junk_m.buf, "lixo = 1\ncorte = 50\n", 20); junk_m.len = 20;
+    CHECK(!st->load(b, &ie), "aceitou estado vazio");
+    CHECK(!st->load(b, &ij), "aceitou estado que não é dele");
+
     /* 5. guitarra: nota reconhecida vira som e MIDI de saída, em várias taxas */
     const double rates[4] = {48000.0, 44100.0, 96000.0, 192000.0};
     for (int r = 0; r < 4; r++) {
