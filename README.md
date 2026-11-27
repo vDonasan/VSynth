@@ -32,6 +32,34 @@ All versions: [Releases](https://github.com/vDonasan/VSynth/releases).
 Presets, settings and recordings are kept next to the program (on macOS, in
 `~/Library/Application Support/Virtual Synth`).
 
+### Plugin for REAPER and other DAWs (CLAP and VST3)
+
+Each download also has a `Plugins` folder with **VirtualSynth.clap** and
+**VirtualSynth.vst3**: the same engine running inside your DAW.
+
+1. Copy them to the plugin folders:
+
+   | System | CLAP | VST3 |
+   |---|---|---|
+   | Windows | `C:\Program Files\Common Files\CLAP` | `C:\Program Files\Common Files\VST3` |
+   | macOS | `~/Library/Audio/Plug-Ins/CLAP` | `~/Library/Audio/Plug-Ins/VST3` |
+   | Linux | `~/.clap` | `~/.vst3` |
+
+2. In REAPER: *Options → Preferences → Plug-ins → CLAP* (or *VST*) → *Re-scan*.
+3. On a track with the guitar (record-armed with monitoring on), add the FX
+   **Virtual Synth**. The guitar comes in on the left channel (or a mono
+   track); MIDI on the track plays the synth too.
+4. To record the guitar's notes as MIDI, set **Saída MIDI → Enviar** to
+   *Guitarra* and route the FX's MIDI output to another track.
+
+The audio goes through REAPER's own driver (ASIO etc.), so there is no extra
+delay or device setup. Every sound parameter can be automated, the project
+saves all of them, the tempo comes from the DAW, and several instances can
+run side by side. Any sample rate works: at 88.2 kHz and up, the guitar
+analysis gets a reduced copy of the input. There is no custom editor yet: the
+DAW shows the parameters, grouped by section. The plugins pass the official
+checkers (clap-validator and Steinberg's VST3 validator).
+
 ## Features
 
 - **Sound:** 2 oscillators, resonant filter, 2 envelopes, LFO, 8 voices
@@ -49,8 +77,10 @@ Presets, settings and recordings are kept next to the program (on macOS, in
     harmonizer and the arpeggiator, and is sent out as MIDI (with pitch bend)
     to REAPER, Ableton, FL Studio, etc.
   - **Direct mode** uses the string's own waveform as the sound source, like
-    guitar synth pedals do. The only delay is the audio buffer, and there are
-    no wrong notes to jump between
+    guitar synth pedals do, and locks to the note once it is recognized. MIDI
+    output and the harmonizer work here too; with the arpeggiator on, it plays
+    instead of the string
+- **Plugin:** CLAP and VST3 for REAPER and other DAWs (see above)
 - **Looper:** record, loop, overdub and undo (up to 60 s), with metronome
 - **Presets:** 21 factory presets in 7 categories (Lead, Pad, Bass, Keys,
   Pluck, Arpeggio, Guitar) plus your own, with a browser and search
@@ -213,6 +243,15 @@ If the delay feels much longer than the numbers above, most of it is probably
 the audio path, not the note detection: on Windows, shared mode can easily add
 20 to 40 ms. Measure it and switch to ASIO or exclusive mode.
 
+**Input and output on different devices** (for example the guitar interface
+as input and the PC's headphone jack as output): each device has its own
+clock, and with a single duplex connection the small difference between them
+shows up as clicks. The app detects this and opens them as two connections
+joined by a bridge that slowly resamples the input to the output's clock
+(the difference is learned, inaudibly). The audio window shows when the
+bridge is on and how much it adds (one block of each side, a few ms). Using
+the same interface for both, or ASIO, is still the lowest-latency setup.
+
 ### 2. Shape the sound (tabs)
 
 - **Som** (Sound): waveforms, filter, envelopes and LFO.
@@ -340,11 +379,14 @@ src/
   guitar.c      guitar input analysis (runs inside the audio callback)
   gtr_direct.c  Direct mode: the synth made from the string's own waveform
   midi.c        PortMidi: input, output (guitar -> MIDI) and MIDI learn
+  drift.c       bridge between two devices with different clocks
+  plugin_clap.c the CLAP plugin (the VST3 wraps it with clap-wrapper)
   recorder.c    WAV recording
   queue.h       lock-free queues between the threads and the audio
 tests/
   test_dsp.c        tests that run without a sound card
   test_midi_out.c   MIDI output bytes, with a fake PortMidi
+  test_clap_host.c  loads the plugin like a DAW and checks it
 ```
 
 Rules that keep the sound click-free:
@@ -369,7 +411,8 @@ It then works with presets and MIDI learn automatically.
 ## Tests
 
 ```sh
-cmake --build build && ./build/test_dsp && ./build/test_midi_out
+cmake --build build && ./build/test_dsp && ./build/test_midi_out \
+  && ./build/test_clap_host build/VirtualSynth.clap
 ```
 
 The tests:
@@ -390,7 +433,12 @@ The tests:
 - measure knob smoothing and the gain from denormal protection;
 - save and load presets;
 - measure latency through a simulated cable from the output to the input;
-- render `demo.wav` with the full engine.
+- check the bridge between two devices with clocks up to 1000 ppm apart (no
+  dropouts, clean sine) and the automatic gate calibration;
+- render `demo.wav` with the full engine;
+- load the plugin like a DAW: MIDI and guitar sound at 44.1 to 192 kHz,
+  guitar notes out as MIDI, independent instances, state save/load, text
+  round trip of every parameter. CI also runs the official clap-validator.
 
 To try the interface without a sound card: `./build/synth --null-audio`.
 To take a screenshot: `--screenshot screen.png`, with `--tab N`, `--mode N`

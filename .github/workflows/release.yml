@@ -42,7 +42,6 @@ jobs:
       - name: Testes
         run: ./build/test_dsp && ./build/test_midi_out && ./build/test_clap_host build/VirtualSynth.clap
       - name: Validador oficial do CLAP (free-audio/clap-validator)
-        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
