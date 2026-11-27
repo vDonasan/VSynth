@@ -2,9 +2,12 @@
 # arquivos prontos para baixar na página de Releases do GitHub.
 #
 # - Ao publicar uma Release na página do GitHub (Releases > Draft a new
-#   release > etiqueta v1.2.0 > Publish), ou ao enviar uma etiqueta
-#   (git tag v1.2.0 && git push --tags): compila, testa e anexa os três
-#   downloads à Release.
+#   release > etiqueta v1.2.0 > Publish): compila, testa e anexa os três
+#   downloads à Release, mantendo a descrição que você escreveu (a tabela
+#   de downloads entra no fim).
+#   Publicar a Release também cria a etiqueta; por isso o envio de
+#   etiquetas NÃO dispara a publicação (antes eram duas execuções e a
+#   segunda trocava a sua descrição pela tabela).
 # - Em qualquer push na main: só compila e testa (os arquivos ficam como
 #   "artifacts" da execução, sem Release).
 name: Compilar e publicar
@@ -12,7 +15,6 @@ name: Compilar e publicar
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
   release:
     types: [published]
@@ -165,7 +167,7 @@ jobs:
 
   release:
     timeout-minutes: 30
-    if: github.event_name == 'release' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
+    if: github.event_name == 'release'
     needs: [linux, windows, windows-tests, macos]
     runs-on: ubuntu-latest
     steps:
@@ -177,7 +179,7 @@ jobs:
         with:
           name: Virtual Synth ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
-          append_body: ${{ github.event_name == 'release' }}
+          append_body: true
           body: |
             ## Baixar
 
