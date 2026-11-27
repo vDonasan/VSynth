@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "i18n.h"
 #include "midi.h"
 #include "params.h"
 
@@ -104,32 +105,46 @@ static void unload_fonts(void)
     U.nfonts = 0;
 }
 
-void ui_text(const char *s, float x, float y, float size, UiWeight w, Color c)
+/* As versões "raw" desenham o texto como está; as públicas traduzem antes
+   (tr devolve o mesmo texto quando não há tradução, ex.: nomes de aparelhos). */
+static void text_raw(const char *s, float x, float y, float size, UiWeight w, Color c)
 {
     Font f = font_for(w, size);
     DrawTextEx(f, s, (Vector2){roundf(x * U.rs) / U.rs, roundf(y * U.rs) / U.rs}, size, 0, c);
 }
 
-float ui_text_width(const char *s, float size, UiWeight w)
+static float width_raw(const char *s, float size, UiWeight w)
 {
     return MeasureTextEx(font_for(w, size), s, size, 0).x;
 }
 
+void ui_text(const char *s, float x, float y, float size, UiWeight w, Color c)
+{
+    text_raw(tr(s), x, y, size, w, c);
+}
+
+float ui_text_width(const char *s, float size, UiWeight w)
+{
+    return width_raw(tr(s), size, w);
+}
+
 void ui_text_center(const char *s, Rectangle r, float size, UiWeight w, Color c)
 {
-    float tw = ui_text_width(s, size, w);
-    ui_text(s, r.x + (r.width - tw) / 2, r.y + (r.height - size * 1.2f) / 2, size, w, c);
+    s = tr(s);
+    float tw = width_raw(s, size, w);
+    text_raw(s, r.x + (r.width - tw) / 2, r.y + (r.height - size * 1.2f) / 2, size, w, c);
 }
 
 void ui_text_right(const char *s, float right, float y, float size, UiWeight w, Color c)
 {
-    ui_text(s, right - ui_text_width(s, size, w), y, size, w, c);
+    s = tr(s);
+    text_raw(s, right - width_raw(s, size, w), y, size, w, c);
 }
 
 void ui_caption(const char *s, float x, float y, Color c)
 {
     Font f = font_for(UI_BOLD, 11);
-    DrawTextEx(f, s, (Vector2){roundf(x * U.rs) / U.rs, roundf(y * U.rs) / U.rs}, 11, 1.1f, c);
+    DrawTextEx(f, tr(s), (Vector2){roundf(x * U.rs) / U.rs, roundf(y * U.rs) / U.rs}, 11, 1.1f, c);
 }
 
 /* ------------------------------------------------------------------ */
@@ -339,7 +354,7 @@ bool ui_clicked(Rectangle r) { return U.released && !U.dd_just_opened && ui_hove
 void ui_tooltip(Rectangle r, const char *text)
 {
     if (!text || U.active || !ui_hover(r)) return;
-    U.tip = text;
+    U.tip = tr(text);
     U.tip_rect = r;
 }
 
@@ -358,7 +373,7 @@ static void draw_tooltip(void)
             buf[i] = p[i];
             buf[i + 1] = 0;
             if (p[i] == ' ') last_space = i;
-            if (ui_text_width(buf, 12, UI_REGULAR) > 280 && last_space > 0) { i = last_space; break; }
+            if (width_raw(buf, 12, UI_REGULAR) > 280 && last_space > 0) { i = last_space; break; }
             i++;
         }
         snprintf(lines[nl], sizeof lines[nl], "%.*s", i, p);
@@ -367,13 +382,13 @@ static void draw_tooltip(void)
         while (*p == ' ') p++;
     }
     float w = 0;
-    for (int i = 0; i < nl; i++) w = fmaxf(w, ui_text_width(lines[i], 12, UI_REGULAR));
+    for (int i = 0; i < nl; i++) w = fmaxf(w, width_raw(lines[i], 12, UI_REGULAR));
     Rectangle box = {U.mouse.x + 14, U.mouse.y + 18, w + 20, nl * 17.0f + 14};
     if (box.x + box.width > UI_W - 6) box.x = U.mouse.x - box.width - 8;
     if (box.y + box.height > UI_H - 6) box.y = U.mouse.y - box.height - 8;
     ui_shadow(box, 8);
     ui_panel(box, 8, (Color){30, 35, 44, 255}, C_BORDER2);
-    for (int i = 0; i < nl; i++) ui_text(lines[i], box.x + 10, box.y + 7 + i * 17.0f, 12, UI_REGULAR, C_TEXT);
+    for (int i = 0; i < nl; i++) text_raw(lines[i], box.x + 10, box.y + 7 + i * 17.0f, 12, UI_REGULAR, C_TEXT);
 }
 
 /* ------------------------------------------------------------------ */
@@ -508,13 +523,14 @@ bool ui_dropdown(Rectangle r, const char *items, int *active, int id)
     ui_rect_lines(r, 9, 1, U.dd_open == id ? C_CYAN_BD : C_BORDER2);
     char t[256];
     item_text(items, *active, t, sizeof t);
+    { const char *x = tr(t); if (x != t) snprintf(t, sizeof t, "%s", x); }
     /* corta o texto se não couber */
     float maxw = r.width - 38;
-    while (strlen(t) > 3 && ui_text_width(t, 12.5f, UI_REGULAR) > maxw) {
+    while (strlen(t) > 3 && width_raw(t, 12.5f, UI_REGULAR) > maxw) {
         size_t l = strlen(t);
         t[l - 4] = '.'; t[l - 3] = '.'; t[l - 2] = '.'; t[l - 1] = 0;
     }
-    ui_text(t, r.x + 11, r.y + (r.height - 15) / 2, 12.5f, UI_REGULAR, C_TEXT);
+    text_raw(t, r.x + 11, r.y + (r.height - 15) / 2, 12.5f, UI_REGULAR, C_TEXT);
     ui_icon("chev-down", r.x + r.width - 24, r.y + (r.height - 14) / 2, 14, C_TEXT2);
     if (ui_clicked(r)) {
         U.dd_open = id;
@@ -596,9 +612,9 @@ bool ui_textbox(Rectangle r, char *buf, int cap, int id, const char *placeholder
     ui_rect_lines(r, 9, 1, focused ? C_CYAN_BD : C_BORDER2);
     float ty = r.y + (r.height - 15) / 2;
     if (!buf[0] && placeholder) ui_text(placeholder, r.x + 10, ty, 12.5f, UI_REGULAR, C_TEXT2);
-    else ui_text(buf, r.x + 10, ty, 12.5f, UI_REGULAR, C_TEXT);
+    else text_raw(buf, r.x + 10, ty, 12.5f, UI_REGULAR, C_TEXT);
     if (focused && fmodf((float)GetTime(), 1.0f) < 0.55f) {
-        float cx = r.x + 10 + ui_text_width(buf, 12.5f, UI_REGULAR) + 1;
+        float cx = r.x + 10 + width_raw(buf, 12.5f, UI_REGULAR) + 1;
         DrawRectangleRec((Rectangle){cx, r.y + 7, 1.5f, r.height - 14}, C_CYAN_HI);
     }
     return enter;
@@ -689,7 +705,7 @@ static bool knob_core(float cx, float cy, float size, int param, Color accent, c
     }
     ui_text_center(val, (Rectangle){cx - 60, vy, 120, 15}, 12, UI_SEMIBOLD, C_TEXT);
     char cap[48];
-    snprintf(cap, sizeof cap, "%s", label ? label : d->label);
+    snprintf(cap, sizeof cap, "%s", tr(label ? label : d->label));
     for (unsigned char *p = (unsigned char *)cap; *p; p++) { /* maiúsculas, inclusive acentos (UTF-8 Latin-1) */
         if (*p >= 'a' && *p <= 'z') *p -= 32;
         else if (*p == 0xC3 && p[1] >= 0xA0 && p[1] <= 0xBE && p[1] != 0xB7) { p[1] -= 0x20; p++; }

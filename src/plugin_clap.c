@@ -16,6 +16,7 @@
 #include <string.h>
 
 #include "engine.h"
+#include "i18n.h"
 #include "params.h"
 #include "queue.h"
 
@@ -405,7 +406,7 @@ static bool ap_get(const clap_plugin_t *pl, uint32_t index, bool is_input, clap_
     (void)pl;
     if (index != 0) return false;
     info->id = is_input ? 0 : 1;
-    snprintf(info->name, sizeof info->name, "%s", is_input ? "Guitarra" : "Saída");
+    snprintf(info->name, sizeof info->name, "%s", tr(is_input ? "Guitarra" : "Saída"));
     info->flags         = CLAP_AUDIO_PORT_IS_MAIN;
     info->channel_count = 2;
     info->port_type     = CLAP_PORT_STEREO;
@@ -422,7 +423,7 @@ static bool np_get(const clap_plugin_t *pl, uint32_t index, bool is_input, clap_
     info->id = is_input ? 0 : 1;
     info->supported_dialects = is_input ? (CLAP_NOTE_DIALECT_CLAP | CLAP_NOTE_DIALECT_MIDI) : CLAP_NOTE_DIALECT_MIDI;
     info->preferred_dialect  = is_input ? CLAP_NOTE_DIALECT_CLAP : CLAP_NOTE_DIALECT_MIDI;
-    snprintf(info->name, sizeof info->name, "%s", is_input ? "MIDI" : "Notas da guitarra");
+    snprintf(info->name, sizeof info->name, "%s", tr(is_input ? "MIDI" : "Notas da guitarra"));
     return true;
 }
 static const clap_plugin_note_ports_t s_note_ports = {np_count, np_get};
@@ -440,8 +441,8 @@ static bool pa_info(const clap_plugin_t *pl, uint32_t index, clap_param_info_t *
     info->flags = CLAP_PARAM_IS_AUTOMATABLE;
     if (d->kind == K_INT || d->kind == K_BOOL || d->kind == K_CHOICE) info->flags |= CLAP_PARAM_IS_STEPPED;
     if (d->kind == K_CHOICE || d->kind == K_BOOL) info->flags |= CLAP_PARAM_IS_ENUM;
-    snprintf(info->name, sizeof info->name, "%s", d->label);
-    snprintf(info->module, sizeof info->module, "%s", module_of(d->key));
+    snprintf(info->name, sizeof info->name, "%s", tr(d->label));
+    snprintf(info->module, sizeof info->module, "%s", tr(module_of(d->key)));
     info->min_value     = d->min;
     info->max_value     = d->max;
     info->default_value = id == P_INPUT_MODE ? 2 : d->def;
@@ -465,7 +466,7 @@ static bool pa_to_text(const clap_plugin_t *pl, clap_id id, double value, char *
     char tmp[64];
     param_format((int)id, tmp, sizeof tmp);
     params_bind(old);
-    snprintf(buf, size, "%s", tmp);
+    snprintf(buf, size, "%s", tr(tmp));
     return true;
 }
 /* o contrário de param_format: entende todas as unidades que ele escreve
@@ -480,7 +481,9 @@ static bool pa_from_text(const clap_plugin_t *pl, clap_id id, const char *text, 
         const char *c = d->choices;
         for (int i = 0; *c; i++) {
             size_t len = strcspn(c, ";");
-            if (strncmp(c, text, len) == 0 && strlen(text) == len) { *v = d->min + i; return true; }
+            char item[96];
+            snprintf(item, sizeof item, "%.*s", (int)len, c);
+            if (!strcmp(item, text) || !strcmp(tr(item), text)) { *v = d->min + i; return true; }
             c += len;
             if (*c == ';') c++;
         }
@@ -492,6 +495,8 @@ static bool pa_from_text(const clap_plugin_t *pl, clap_id id, const char *text, 
     if (!strcmp(d->unit, "mix")) {
         if (!strncmp(text, "só synth", 9)) { *v = 0; return true; }
         if (!strncmp(text, "só gtr", 7)) { *v = 1; return true; }
+        if (!strcmp(text, "synth only")) { *v = 0; return true; }
+        if (!strcmp(text, "gtr only")) { *v = 1; return true; }
     }
     char *end;
     double x = strtod(text, &end);
@@ -847,7 +852,27 @@ static const clap_plugin_t *f_create(const clap_plugin_factory_t *f, const clap_
 }
 static const clap_plugin_factory_t s_factory = {f_count, f_desc, f_create};
 
-static bool e_init(const char *path) { (void)path; return true; }
+/* idioma: o mesmo arquivo que a janela do plugin grava (ao lado da pasta
+   de presets); sem ele, o idioma do sistema */
+static void lang_load(void)
+{
+    char path[1024] = "";
+#if defined(_WIN32)
+    const char *a = getenv("APPDATA");
+    snprintf(path, sizeof path, "%s\\VirtualSynth\\idioma.txt", a ? a : ".");
+#elif defined(__APPLE__)
+    const char *h = getenv("HOME");
+    snprintf(path, sizeof path, "%s/Library/Application Support/Virtual Synth/idioma.txt", h ? h : ".");
+#else
+    const char *x = getenv("XDG_DATA_HOME"), *h = getenv("HOME");
+    if (x && x[0]) snprintf(path, sizeof path, "%s/VirtualSynth/idioma.txt", x);
+    else snprintf(path, sizeof path, "%s/.local/share/VirtualSynth/idioma.txt", h ? h : ".");
+#endif
+    int l = i18n_parse(getenv("VSYNTH_LANG")); /* para testes */
+    if (l < 0) l = i18n_load_file(path);
+    i18n_set(l >= 0 ? l : i18n_system_default());
+}
+static bool e_init(const char *path) { (void)path; lang_load(); return true; }
 static void e_deinit(void) {}
 static const void *e_factory(const char *id) { return !strcmp(id, CLAP_PLUGIN_FACTORY_ID) ? &s_factory : NULL; }
 

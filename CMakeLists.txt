@@ -45,7 +45,7 @@ FetchContent_Populate(miniaudio)  # só o cabeçalho
 set(CORE_SOURCES
   src/params.c src/synth.c src/fx.c src/arp.c src/looper.c
   src/pitch.c src/guitar.c src/gtr_direct.c
-    src/drift.c src/engine.c src/recorder.c)
+    src/drift.c src/engine.c src/recorder.c src/i18n.c src/i18n_table.c)
 
 # Núcleo de áudio (sem interface), usado pelo app e pelos testes
 add_library(synthcore STATIC ${CORE_SOURCES} src/miniaudio_impl.c)
@@ -56,6 +56,9 @@ find_package(Threads REQUIRED)
 target_link_libraries(synthcore PUBLIC Threads::Threads)
 if(UNIX)
   target_link_libraries(synthcore PUBLIC m ${CMAKE_DL_LIBS})
+endif()
+if(APPLE)
+  target_link_libraries(synthcore PUBLIC "-framework CoreFoundation")  # idioma do sistema
 endif()
 
 # Fontes Inter embutidas no executável (licença em assets/fonts/OFL-Inter.txt)

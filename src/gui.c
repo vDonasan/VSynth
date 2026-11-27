@@ -20,6 +20,7 @@
 #include "engine.h"
 #include "fx.h"
 #include "gui.h"
+#include "i18n.h"
 #include "midi.h"
 #include "params.h"
 #include "pitch.h"
@@ -43,6 +44,17 @@ enum { TB_SAVE = 1, TB_SEARCH };
 
 /* pasta dos presets do usuário (no plugin, a pasta de dados do usuário) */
 static char g_preset_dir[1024] = PRESET_DIR;
+
+/* O app guarda o idioma em configuracoes.ini (ao fechar); o plugin, num
+   arquivo ao lado da pasta de presets, lido também ao carregar o plugin. */
+static void lang_save(void)
+{
+#ifdef GUI_PLUGIN
+    char path[1100];
+    snprintf(path, sizeof path, "%s/../idioma.txt", g_preset_dir);
+    i18n_save_file(path, i18n_get());
+#endif
+}
 
 typedef struct Gui {
     Engine *e;
@@ -206,7 +218,7 @@ static void apply_midi(Gui *g)
     if (midi_refresh() == 0) { midi_close(); return; }
     if (midi_open(g->midi_active, &g->e->q_midi) == 0) {
         char m[200];
-        snprintf(m, sizeof m, "MIDI conectado: %s", midi_open_name());
+        snprintf(m, sizeof m, tr("MIDI conectado: %s"), midi_open_name());
         set_status(g, m);
     } else {
         set_status(g, "Não foi possível abrir o dispositivo MIDI");
@@ -227,7 +239,7 @@ static void apply_midi_out(Gui *g)
     }
     if (midi_out_open(idx, &g->e->q_mout) == 0) {
         char m[200];
-        snprintf(m, sizeof m, "Saída MIDI: enviando para %s", midi_out_open_name());
+        snprintf(m, sizeof m, tr("Saída MIDI: enviando para %s"), midi_out_open_name());
         set_status(g, m);
     } else {
         set_status(g, "Não foi possível abrir a saída MIDI");
@@ -310,7 +322,7 @@ static void load_preset(Gui *g, int idx)
     }
     g->preset_active = idx;
     char m[160];
-    snprintf(m, sizeof m, "Preset carregado: %s", g->preset_name);
+    snprintf(m, sizeof m, tr("Preset carregado: %s"), g->preset_name);
     set_status(g, m);
 }
 
@@ -335,7 +347,7 @@ static void save_preset(Gui *g, const char *name)
             if (!strcmp(g->user_presets[i], clean)) g->preset_active = factory_preset_count() + i;
         snprintf(g->preset_name, sizeof g->preset_name, "%s", clean);
         char m[1300];
-        snprintf(m, sizeof m, "Preset salvo em %s", path);
+        snprintf(m, sizeof m, tr("Preset salvo em %s"), path);
         set_status(g, m);
     } else {
         set_status(g, "Não foi possível salvar o preset");
@@ -385,6 +397,7 @@ static void save_settings(Gui *g)
     fprintf(f, "preset_nome = %s\n", g->preset_name);
     fprintf(f, "preset_indice = %d\n", g->preset_active);
     fprintf(f, "aba = %d\n", g->tab);
+    fprintf(f, "idioma = %s\n", i18n_code(i18n_get()));
     fprintf(f, "\n# Som atual e ajustes (mesmo formato dos presets)\n");
     params_write_all(f);
     fclose(f);
@@ -416,6 +429,7 @@ static void load_settings(Gui *g)
         else if (!strcmp(k, "preset_nome"))   snprintf(g->preset_name, sizeof g->preset_name, "%s", v);
         else if (!strcmp(k, "preset_indice")) g->preset_active = atoi(v);
         else if (!strcmp(k, "aba"))           g->tab = atoi(v) % 6;
+        else if (!strcmp(k, "idioma"))        { if ((idx = i18n_parse(v)) >= 0) i18n_set(idx); }
         else params_read_line(k, v);
     }
     fclose(f);
@@ -478,9 +492,9 @@ static void toggle_recording(Gui *g)
         drain_recording(g);
         char m[600];
         if (recorder_active(&g->rec_gtr))
-            snprintf(m, sizeof m, "Gravação salva: %s (%.1f s) + entrada da guitarra em ...-guitarra.wav", g->rec.path,
+            snprintf(m, sizeof m, tr("Gravação salva: %s (%.1f s) + entrada da guitarra em ...-guitarra.wav"), g->rec.path,
                      g->rec.frames / g->e->sr);
-        else snprintf(m, sizeof m, "Gravação salva: %s (%.1f s)", g->rec.path, g->rec.frames / g->e->sr);
+        else snprintf(m, sizeof m, tr("Gravação salva: %s (%.1f s)"), g->rec.path, g->rec.frames / g->e->sr);
         recorder_stop(&g->rec);
         recorder_stop(&g->rec_gtr);
         set_status(g, m);
@@ -759,6 +773,18 @@ static void draw_top_bar(Gui *g)
     }
     ui_tooltip((Rectangle){542, 10, 92, 36}, "Salva o som atual como um preset seu (pasta presets/).");
 
+    /* idioma da interface */
+    {
+        Rectangle lr = {644, 14, 62, 28};
+        int lang = i18n_get();
+        if (ui_segmented(lr, "PT;EN", &lang, C_CYAN, C_CYAN_BG, C_CYAN_HI)) {
+            i18n_set(lang);
+            lang_save();
+            set_status(g, lang == LANG_EN ? "Interface in English" : "Interface em português");
+        }
+        ui_tooltip(lr, "Idioma da interface");
+    }
+
     /* lado direito */
     float x = 1268;
     /* volume geral + medidor */
@@ -782,7 +808,7 @@ static void draw_top_bar(Gui *g)
             if (ui_hover(hit)) param_set_norm(P_MASTER, param_get_norm(P_MASTER) + GetMouseWheelMove() * 0.025f);
         }
         char t[128];
-        snprintf(t, sizeof t, "Volume geral: %.0f%%. Arraste para cima/baixo ou use a roda do mouse.", param_get(P_MASTER) * 100);
+        snprintf(t, sizeof t, tr("Volume geral: %.0f%%. Arraste para cima/baixo ou use a roda do mouse."), param_get(P_MASTER) * 100);
         ui_tooltip(hit, t);
     }
     x -= 36 + 14;
@@ -804,7 +830,7 @@ static void draw_top_bar(Gui *g)
     char rl[48];
     if (rec) {
         double s = GetTime() - g->rec_start;
-        snprintf(rl, sizeof rl, "Gravando %02d:%02d", (int)s / 60, (int)s % 60);
+        snprintf(rl, sizeof rl, tr("Gravando %02d:%02d"), (int)s / 60, (int)s % 60);
     } else snprintf(rl, sizeof rl, "@rec Gravar");
     Rectangle rb = {x - 138, 10, 138, 36};
     if (ui_button(rb, rl, rec ? UI_BTN_DANGER : UI_BTN_NORMAL)) toggle_recording(g);
@@ -870,7 +896,7 @@ static void draw_tuner(Gui *g, Rectangle r)
     ui_text(oct, r.x + 14 + nw, r.y + 40, 15, UI_SEMIBOLD, nc);
     if (fresh) {
         char t[48];
-        snprintf(t, sizeof t, "%.1f Hz · %+.0f cents", g->tuner_hz, g->tuner_cents);
+        snprintf(t, sizeof t, tr("%.1f Hz · %+.0f cents"), g->tuner_hz, g->tuner_cents);
         ui_text(t, r.x + 72, r.y + 41, 12.5f, UI_REGULAR, C_TEXT2);
     }
     /* régua de cents com ponteiro */
@@ -929,7 +955,7 @@ static void input_guitar(Gui *g, Rectangle p)
     double now = GetTime();
     Rectangle cb = {x + w - 112, y - 6, 112, 24};
     char cl[32];
-    if (g->calibrating) snprintf(cl, sizeof cl, "Medindo... %d", (int)ceil(2.0 - (now - g->calib_start)));
+    if (g->calibrating) snprintf(cl, sizeof cl, tr("Medindo... %d"), (int)ceil(2.0 - (now - g->calib_start)));
     else snprintf(cl, sizeof cl, "Calibrar gate");
     if (ui_button(cb, cl, g->calibrating ? UI_BTN_AMBER : UI_BTN_NORMAL) && !g->calibrating) {
         if (!PLUGIN && engine_capture_channels(e) == 0)
@@ -949,11 +975,11 @@ static void input_guitar(Gui *g, Rectangle p)
             char msg[200];
             param_set(P_GTR_GATE, ng);
             if (noise > -25.0f)
-                snprintf(msg, sizeof msg, "Calibração: entrada muito alta (%.0f dB). Tocou durante a medida? Gate em %.0f dB; tente de novo.", noise, ng);
+                snprintf(msg, sizeof msg, tr("Calibração: entrada muito alta (%.0f dB). Tocou durante a medida? Gate em %.0f dB; tente de novo."), noise, ng);
             else if (noise + 10.0f < -70.0f)
-                snprintf(msg, sizeof msg, "Calibração: entrada quase sem ruído (%.0f dB). Gate no mínimo, %.0f dB: as notas soam até o fim.", noise, ng);
+                snprintf(msg, sizeof msg, tr("Calibração: entrada quase sem ruído (%.0f dB). Gate no mínimo, %.0f dB: as notas soam até o fim."), noise, ng);
             else
-                snprintf(msg, sizeof msg, "Calibração: ruído de %.0f dB, gate ajustado para %.0f dB.", noise, ng);
+                snprintf(msg, sizeof msg, tr("Calibração: ruído de %.0f dB, gate ajustado para %.0f dB."), noise, ng);
             set_status(g, msg);
         } else if (now - g->calib_start > 4.0) { /* o áudio parou no meio */
             g->calibrating = 0;
@@ -1371,7 +1397,7 @@ static void tab_modulation(Gui *g)
         ui_panel((Rectangle){area.x + 14, y, area.width - 28, 50}, 10, active ? (Color){24, 28, 34, 255} : C_WELL, C_BORDER);
         ui_led(area.x + 32, y + 25, 4, active, C_AMBER);
         char lab[16];
-        snprintf(lab, sizeof lab, "Cabo %d", i + 1);
+        snprintf(lab, sizeof lab, tr("Cabo %d"), i + 1);
         ui_text(lab, area.x + 46, y + 17, 12.5f, UI_SEMIBOLD, active ? C_TEXT : C_TEXT2);
         vals[i][0] = param_geti(P_MOD_SRC(i));
         vals[i][1] = param_geti(P_MOD_VIA(i));
@@ -1573,7 +1599,7 @@ static void tab_looper(Gui *g)
     if (st == LOOP_EMPTY) snprintf(t, sizeof t, "--");
     else snprintf(t, sizeof t, "%.1f s", (st == LOOP_RECORDING ? len : pos) / sr);
     ui_text_center(t, (Rectangle){ctr.x - 80, ctr.y - 26, 160, 36}, 30, UI_BOLD, C_TEXT);
-    if (st != LOOP_EMPTY && st != LOOP_RECORDING) snprintf(t, sizeof t, "de %.1f s", len / sr);
+    if (st != LOOP_EMPTY && st != LOOP_RECORDING) snprintf(t, sizeof t, tr("de %.1f s"), len / sr);
     else snprintf(t, sizeof t, st == LOOP_RECORDING ? "máx. 60 s" : "nada gravado");
     ui_text_center(t, (Rectangle){ctr.x - 80, ctr.y + 12, 160, 16}, 12, UI_REGULAR, C_TEXT2);
 
@@ -1646,7 +1672,7 @@ static void tab_midi_out(Gui *g)
     if (ui_button((Rectangle){x + w - 38, c.y + 130, 38, 34}, "@refresh", UI_BTN_NORMAL)) refresh_all_devices(g);
     bool open = midi_out_is_open();
     char st[200];
-    if (open) snprintf(st, sizeof st, "Enviando para: %.40s", midi_out_open_name());
+    if (open) snprintf(st, sizeof st, tr("Enviando para: %.40s"), midi_out_open_name());
     else snprintf(st, sizeof st, "%s", src ? "Saída fechada (veja o destino)" : "Desligada");
     ui_led(x + 5, c.y + 186, 4, open, C_GREEN);
     ui_text(st, x + 16, c.y + 178, 12.5f, UI_SEMIBOLD, open ? C_GREEN : C_TEXT2);
@@ -1718,7 +1744,7 @@ static void latency_update(Gui *g)
             g->lat_ms = g->lat_vals[2]; /* mediana: ignora uma medição estranha */
             g->lat_running = false;
             char m[160];
-            snprintf(m, sizeof m, "Latência de ida e volta: %.1f ms (mediana de 5 medições)", g->lat_ms);
+            snprintf(m, sizeof m, tr("Latência de ida e volta: %.1f ms (mediana de 5 medições)"), g->lat_ms);
             set_status(g, m);
         }
         return;
@@ -1915,9 +1941,9 @@ static void draw_audio_dialog(Gui *g)
     if (ui_button((Rectangle){x + w - 38, r.y + 70, 38, 34}, "@refresh", UI_BTN_NORMAL)) { build_device_lists(g); apply_audio(g); }
     char t[160];
     if (g->e->dev_ok && g->e->bridge_ms > 0.0f)
-        snprintf(t, sizeof t, "Funcionando: %u Hz · buffer de %.1f ms · entrada e saída em aparelhos diferentes (+%.0f ms de ponte)",
+        snprintf(t, sizeof t, tr("Funcionando: %u Hz · buffer de %.1f ms · entrada e saída em aparelhos diferentes (+%.0f ms de ponte)"),
                  g->e->dev_rate, g->e->dev_latency_ms, g->e->bridge_ms);
-    else if (g->e->dev_ok) snprintf(t, sizeof t, "Funcionando: %u Hz · buffer de %.1f ms%s", g->e->dev_rate, g->e->dev_latency_ms,
+    else if (g->e->dev_ok) snprintf(t, sizeof t, tr("Funcionando: %u Hz · buffer de %.1f ms%s"), g->e->dev_rate, g->e->dev_latency_ms,
                                g->e->asio_open ? " · ASIO" : (g->e->exclusive && !g->e->exclusive_failed ? " · exclusivo" : ""));
     else snprintf(t, sizeof t, "Áudio desligado");
     ui_led(x + 5, r.y + 124, 4, g->e->dev_ok, C_GREEN);
@@ -1935,7 +1961,7 @@ static void draw_audio_dialog(Gui *g)
         apply_audio(g);
         char m[120];
         if (sizes[sel] == 32) snprintf(m, sizeof m, "Buffer de 32 amostras: o mínimo. Funciona melhor com ASIO; se ouvir estalos, aumente.");
-        else snprintf(m, sizeof m, "Buffer de %d amostras. Se ouvir estalos, aumente.", sizes[sel]);
+        else snprintf(m, sizeof m, tr("Buffer de %d amostras. Se ouvir estalos, aumente."), sizes[sel]);
         set_status(g, m);
     }
     ui_text("Menor = menos atraso. Se aparecerem estalos, use um valor maior.", x, r.y + 226, 12, UI_REGULAR, C_TEXT2);
@@ -1971,7 +1997,7 @@ static void draw_audio_dialog(Gui *g)
     ui_text("microfone no alto-falante), com a entrada Guitarra ativa.", x, r.y + 367, 12, UI_REGULAR, C_TEXT2);
     Rectangle mb = {x, r.y + 394, 150, 36};
     char bl[40];
-    if (g->lat_running) snprintf(bl, sizeof bl, "Medindo %d/5...", g->lat_runs + 1);
+    if (g->lat_running) snprintf(bl, sizeof bl, tr("Medindo %d/5..."), g->lat_runs + 1);
     else snprintf(bl, sizeof bl, "@play Medir");
     ui_tooltip(mb, "Toca 5 cliques e mede quanto tempo cada um leva para voltar pela entrada.");
     if (ui_button(mb, bl, UI_BTN_CYAN) && !g->lat_running) {
@@ -1986,9 +2012,9 @@ static void draw_audio_dialog(Gui *g)
         }
     }
     if (g->lat_ms > 0) {
-        snprintf(t, sizeof t, "Ida e volta: %.1f ms", g->lat_ms);
+        snprintf(t, sizeof t, tr("Ida e volta: %.1f ms"), g->lat_ms);
         ui_text(t, x + 166, r.y + 396, 15, UI_BOLD, C_CYAN_HI);
-        snprintf(t, sizeof t, "Da palhetada ao som: ~%.0f a %.0f ms (+ 12 a 17 ms para reconhecer a nota)", g->lat_ms + 12, g->lat_ms + 17);
+        snprintf(t, sizeof t, tr("Da palhetada ao som: ~%.0f a %.0f ms (+ 12 a 17 ms para reconhecer a nota)"), g->lat_ms + 12, g->lat_ms + 17);
         ui_text(t, x + 166, r.y + 416, 11.5f, UI_REGULAR, C_TEXT2);
     } else if (g->lat_ms < 0) {
         ui_text("Não ouvi o clique voltar. Confira o cabo e o volume.", x + 166, r.y + 404, 12, UI_REGULAR, C_RED);
@@ -2039,12 +2065,12 @@ static void draw_status_bar(Gui *g)
         return;
     }
     ui_led(20, y + 7, 3.5f, g->e->dev_ok, C_GREEN);
-    if (g->e->dev_ok) snprintf(t, sizeof t, "Áudio %u Hz · buffer %.1f ms", g->e->dev_rate, g->e->dev_latency_ms);
+    if (g->e->dev_ok) snprintf(t, sizeof t, tr("Áudio %u Hz · buffer %.1f ms"), g->e->dev_rate, g->e->dev_latency_ms);
     else snprintf(t, sizeof t, "Áudio desligado");
     ui_text(t, 30, y, 11.5f, UI_REGULAR, C_TEXT2);
     float x = 30 + ui_text_width(t, 11.5f, UI_REGULAR) + 22;
     if (midi_out_is_open()) {
-        snprintf(t, sizeof t, "Saída MIDI: %.40s", midi_out_open_name());
+        snprintf(t, sizeof t, tr("Saída MIDI: %.40s"), midi_out_open_name());
         ui_text(t, x, y, 11.5f, UI_REGULAR, C_TEXT2);
     }
     ui_text_right(ui_learn() ? "MIDI LEARN ATIVO" : "F1 tela cheia · Espaço sustain · Enter looper", UI_W - 16, y, 11.5f,
@@ -2074,7 +2100,7 @@ static void gui_frame(Gui *g)
                 midi_map(cc, ui_learn_target());
                 midi_map_save("midi-learn.txt");
                 char m[160];
-                snprintf(m, sizeof m, "MIDI learn: CC%d -> %s", cc, param_def(ui_learn_target())->label);
+                snprintf(m, sizeof m, "MIDI learn: CC%d -> %s", cc, tr(param_def(ui_learn_target())->label));
                 set_status(g, m);
                 ui_set_learn_target(-1);
                 g->learn_seen = cnt;
@@ -2160,6 +2186,7 @@ int gui_run(Engine *e, const GuiOptions *opt)
     SetTargetFPS(60);
     ui_init();
 
+    i18n_set(i18n_system_default()); /* até configuracoes.ini dizer outro */
     build_device_lists(g);
     build_preset_list(g);
     if (!(opt && opt->no_settings)) load_settings(g);

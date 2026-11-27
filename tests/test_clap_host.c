@@ -128,11 +128,42 @@ static double run(const clap_plugin_t *p, int blocks, InList *first, OutList *ou
     return sqrt(acc / (blocks * 512.0));
 }
 
+/* texto -> valor -> texto igual para todos os parâmetros */
+static int text_round_trip(const clap_plugin_t *a, const clap_plugin_params_t *pa)
+{
+    int bad_rt = 0;
+    for (uint32_t i = 0; i < pa->count(a); i++) {
+        clap_param_info_t inf;
+        pa->get_info(a, i, &inf);
+        for (int k = 0; k <= 10; k++) {
+            double x = inf.min_value + (inf.max_value - inf.min_value) * k / 10.0, y;
+            char t1[64], t2[64];
+            if (!pa->value_to_text(a, inf.id, x, t1, sizeof t1) || !pa->text_to_value(a, inf.id, t1, &y) ||
+                !pa->value_to_text(a, inf.id, y, t2, sizeof t2) || strcmp(t1, t2) != 0) {
+                if (bad_rt++ < 5) printf("  ida e volta: %s %.4g -> \"%s\" -> %.4g -> \"%s\"\n", inf.name, x, t1, y, t2);
+            }
+        }
+    }
+    return bad_rt;
+}
+
+static void set_lang(const char *code)
+{
+#ifdef _WIN32
+    char b[32];
+    snprintf(b, sizeof b, "VSYNTH_LANG=%s", code);
+    _putenv(b);
+#else
+    setenv("VSYNTH_LANG", code, 1);
+#endif
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2) { printf("uso: %s VirtualSynth.clap\n", argv[0]); return 2; }
     void *lib = load_lib(argv[1]);
     if (!lib) { printf("não abriu %s\n", argv[1]); return 1; }
+    set_lang("pt"); /* os nomes procurados abaixo estão em português */
     const clap_plugin_entry_t *entry = get_sym(lib, "clap_entry");
     if (!entry || !entry->init(argv[1])) { printf("sem clap_entry\n"); return 1; }
     const clap_plugin_factory_t *f = entry->get_factory(CLAP_PLUGIN_FACTORY_ID);
@@ -185,19 +216,7 @@ int main(int argc, char **argv)
 
     /* 4b. texto -> valor -> texto igual para todos os parâmetros (como o
        clap-validator confere) */
-    int bad_rt = 0;
-    for (uint32_t i = 0; i < pa->count(a); i++) {
-        clap_param_info_t inf;
-        pa->get_info(a, i, &inf);
-        for (int k = 0; k <= 10; k++) {
-            double x = inf.min_value + (inf.max_value - inf.min_value) * k / 10.0, y;
-            char t1[64], t2[64];
-            if (!pa->value_to_text(a, inf.id, x, t1, sizeof t1) || !pa->text_to_value(a, inf.id, t1, &y) ||
-                !pa->value_to_text(a, inf.id, y, t2, sizeof t2) || strcmp(t1, t2) != 0) {
-                if (bad_rt++ < 5) printf("  ida e volta: %s %.4g -> \"%s\" -> %.4g -> \"%s\"\n", inf.name, x, t1, y, t2);
-            }
-        }
-    }
+    int bad_rt = text_round_trip(a, pa);
     printf("  texto ida e volta: %d problema(s)\n", bad_rt);
     CHECK(bad_rt == 0, "texto <-> valor não volta igual");
 
@@ -252,6 +271,27 @@ int main(int argc, char **argv)
 
     a->destroy(a);
     b->destroy(b);
+    entry->deinit();
+
+    /* 6. em inglês: nomes traduzidos e texto <-> valor continua voltando igual */
+    set_lang("en");
+    entry->init(argv[1]);
+    const clap_plugin_t *e = make(f);
+    CHECK(e != NULL, "não criou a instância em inglês");
+    if (e) {
+        const clap_plugin_params_t *pe = e->get_extension(e, CLAP_EXT_PARAMS);
+        clap_id ec = find_param(e, "Cutoff", "Filter");
+        CHECK(ec != CLAP_INVALID_ID, "em inglês, não achou Filter > Cutoff");
+        clap_id es = find_param(e, "Send", "MIDI Out");
+        char t[64] = "";
+        if (es != CLAP_INVALID_ID) pe->value_to_text(e, es, 1.0, t, sizeof t);
+        printf("  inglês: Filter > Cutoff %s, MIDI Out > Send = \"%s\"\n", ec != CLAP_INVALID_ID ? "ok" : "faltando", t);
+        CHECK(!strcmp(t, "Guitar"), "em inglês, a escolha não veio traduzida");
+        int bad_en = text_round_trip(e, pe);
+        printf("  inglês, texto ida e volta: %d problema(s)\n", bad_en);
+        CHECK(bad_en == 0, "em inglês, texto <-> valor não volta igual");
+        e->destroy(e);
+    }
     entry->deinit();
     printf(failures ? "\n%d falha(s)\n" : "\nPlugin: todos os testes passaram.\n", failures);
     return failures ? 1 : 0;

@@ -103,6 +103,8 @@ folder (`%APPDATA%\VirtualSynth\presets` on Windows,
 
 ## How to use
 
+**Language:** the **PT | EN** switch in the top bar changes the whole interface between Portuguese and English, in the app and in the plugin. The first time, it follows your system language. The app remembers the choice in `configuracoes.ini`; the plugin keeps it in `idioma.txt` next to its presets folder, so parameter names in the DAW follow it too (the DAW may need the project reopened to show the new names).
+
 ### 1. Choose the input (left panel)
 
 | Input | What to do |
@@ -372,6 +374,8 @@ machine). To publish a new version, on the repository page go to
 automatically. (`git tag v1.1.0 && git push --tags` works too.)
 
 ## Code layout
+
+Translations live in `src/i18n_table.c` (Portuguese text as written in the code → English); `tr()` in `src/i18n.c` looks them up. A text missing from the table shows in Portuguese; build with `-DI18N_LOG_MISS` to list those.
 
 ```
 src/
