@@ -53,9 +53,20 @@
 typedef enum { UI_REGULAR, UI_SEMIBOLD, UI_BOLD } UiWeight;
 typedef enum { UI_BTN_NORMAL, UI_BTN_AMBER, UI_BTN_CYAN, UI_BTN_DANGER, UI_BTN_GHOST } UiButtonStyle;
 
+/* ---------- estado ----------
+   O app usa um estado só. O plugin cria um por janela e chama ui_bind()
+   antes de desenhar (e antes de ui_init/ui_shutdown daquela janela). */
+typedef struct UiState UiState;
+UiState *ui_state_create(void);
+void     ui_state_destroy(UiState *s);
+UiState *ui_bind(UiState *s); /* devolve o anterior; NULL = o do app */
+
 /* ---------- ciclo de vida ---------- */
 void  ui_init(void);
 void  ui_shutdown(void);
+/* Plugin: desenha na escala exata da janela em vez de 1x/2x/3x ampliado
+   (chame depois de ui_init). */
+void  ui_set_exact_scale(bool on);
 /* Começa o quadro: calcula a escala da janela e prepara a tela virtual. */
 void  ui_begin_frame(Color clear);
 /* Desenha o que ficou por cima (listas abertas, dicas) e mostra na janela. */

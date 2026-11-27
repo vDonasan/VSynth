@@ -1,6 +1,7 @@
 #include "ui.h"
 
 #include <math.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -15,9 +16,10 @@ extern const unsigned int font_inter_regular_size, font_inter_semibold_size, fon
 
 typedef struct { int weight, px; Font font; } CachedFont;
 
-static struct {
+struct UiState {
     RenderTexture2D canvas;
-    int    rs;                 /* resolução interna: 1x, 2x ou 3x a tela virtual */
+    float  rs;                 /* resolução interna: 1x, 2x ou 3x a tela virtual (no plugin, a escala exata) */
+    bool   exact;              /* plugin: desenha direto na escala da janela (texto nítido a 125%, 150%...) */
     float  scale, ox, oy;
     CachedFont fonts[MAX_FONTS];
     int    nfonts;
@@ -53,7 +55,21 @@ static struct {
 
     bool   modal, in_modal;
     Rectangle modal_rect;
-} U;
+};
+
+/* o app usa um só; cada janela do plugin tem o seu (ui_bind) */
+static UiState U_default;
+static UiState *U_cur = &U_default;
+#define U (*U_cur)
+
+UiState *ui_state_create(void) { return calloc(1, sizeof(UiState)); }
+void     ui_state_destroy(UiState *s) { free(s); }
+UiState *ui_bind(UiState *s)
+{
+    UiState *o = U_cur;
+    U_cur = s ? s : &U_default;
+    return o;
+}
 
 /* ------------------------------------------------------------------ */
 /* Fontes                                                              */
@@ -119,6 +135,8 @@ void ui_caption(const char *s, float x, float y, Color c)
 /* ------------------------------------------------------------------ */
 /* Ciclo de vida                                                       */
 /* ------------------------------------------------------------------ */
+void ui_set_exact_scale(bool on) { U.exact = on; }
+
 void ui_init(void)
 {
     memset(&U, 0, sizeof U);
@@ -138,13 +156,14 @@ void ui_begin_frame(Color clear)
     U.scale = fminf(sw / UI_W, sh / UI_H);
     /* pixels de verdade por ponto da janela (2 na tela Retina, 1 no resto) */
     float px = GetScreenWidth() > 0 ? (float)GetRenderWidth() / GetScreenWidth() : 1.0f;
-    int rs = (int)ceilf(U.scale * px - 0.05f);
-    if (rs < 1) rs = 1;
+    float rs = ceilf(U.scale * px - 0.05f);
+    if (U.exact) rs = roundf(U.scale * px * 100.0f) / 100.0f; /* sem cópia ampliada: cada ponto no pixel certo */
+    if (rs < (U.exact ? 0.25f : 1.0f)) rs = U.exact ? 0.25f : 1.0f;
     if (rs > 3) rs = 3;
     if (rs != U.rs) { /* mudou a escala: refaz a tela interna e as fontes */
         if (U.rs) UnloadRenderTexture(U.canvas);
         unload_fonts();
-        U.canvas = LoadRenderTexture(UI_W * rs, UI_H * rs);
+        U.canvas = LoadRenderTexture((int)lroundf(UI_W * rs), (int)lroundf(UI_H * rs));
         SetTextureFilter(U.canvas.texture, TEXTURE_FILTER_BILINEAR);
         U.rs = rs;
     }
@@ -163,7 +182,7 @@ void ui_begin_frame(Color clear)
 
     BeginTextureMode(U.canvas);
     ClearBackground(clear);
-    BeginMode2D((Camera2D){.zoom = (float)U.rs});
+    BeginMode2D((Camera2D){.zoom = U.rs});
 }
 
 static void draw_dropdown_overlay(void);
@@ -178,7 +197,7 @@ void ui_end_frame(void)
 
     BeginDrawing();
     ClearBackground(BLACK);
-    DrawTexturePro(U.canvas.texture, (Rectangle){0, 0, (float)UI_W * U.rs, -(float)UI_H * U.rs},
+    DrawTexturePro(U.canvas.texture, (Rectangle){0, 0, (float)U.canvas.texture.width, -(float)U.canvas.texture.height},
                    (Rectangle){U.ox, U.oy, UI_W * U.scale, UI_H * U.scale}, (Vector2){0, 0}, 0, WHITE);
     EndDrawing();
     SetMouseCursor(U.want_hand || U.active ? MOUSE_CURSOR_POINTING_HAND : MOUSE_CURSOR_DEFAULT);

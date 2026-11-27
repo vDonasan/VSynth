@@ -19,6 +19,21 @@
 #include "params.h"
 #include "queue.h"
 
+#ifdef VSYNTH_GUI
+#include <sys/stat.h>
+#include "gui.h"
+#include "plugin_gui.h"
+#ifdef _WIN32
+#include <direct.h>
+#define mkdir_one(p) _mkdir(p)
+#else
+#define mkdir_one(p) mkdir(p, 0755)
+#endif
+#endif
+
+#define UI_W_DEFAULT 1280
+#define UI_H_DEFAULT 800
+
 #ifndef VSYNTH_VERSION
 #define VSYNTH_VERSION "1.0.7"
 #endif
@@ -78,6 +93,20 @@ typedef struct {
     float              *in;   /* guitarra (mono) */
     float              *out;  /* estéreo intercalado */
     int                 last_bend; /* último pitch bend mandado (não repete o mesmo) */
+#ifdef VSYNTH_GUI
+    /* interface */
+    Gui                *gui;
+    RlContext          *rl;
+    PlugWin            *win;
+    uint32_t            gw, gh;     /* tamanho no padrão do host (pixels; pontos no Mac) */
+    double              gscale;
+    clap_id             timer;
+    int                 has_timer;
+    /* mudanças feitas na tela, para avisar o host (automação, controles) */
+    _Atomic float       seen[P_COUNT];
+    struct { int id; float v; } pend[256];
+    atomic_uint         pend_w, pend_r;
+#endif
 } Inst;
 
 static void apply_param(Inst *p, const clap_event_param_value_t *ev)
@@ -86,7 +115,36 @@ static void apply_param(Inst *p, const clap_event_param_value_t *ev)
     ParamSet *old = params_bind(&p->ps);
     param_set((int)ev->param_id, (float)ev->value);
     params_bind(old);
+#ifdef VSYNTH_GUI
+    /* veio do host: a tela não deve devolvê-lo como mudança dela */
+    atomic_store(&p->seen[ev->param_id], atomic_load(&p->ps.values[ev->param_id]));
+#endif
 }
+
+#ifdef VSYNTH_GUI
+/* manda para o host o que mudou pela tela (thread de áudio ou flush) */
+static void push_gui_changes(Inst *p, const clap_output_events_t *out)
+{
+    unsigned r = atomic_load_explicit(&p->pend_r, memory_order_relaxed);
+    unsigned w = atomic_load_explicit(&p->pend_w, memory_order_acquire);
+    while (r != w) {
+        int id = p->pend[r & 255].id;
+        float v = p->pend[r & 255].v;
+        r++;
+        if (!out) continue;
+        clap_event_param_value_t e;
+        memset(&e, 0, sizeof e);
+        e.header.size = sizeof e;
+        e.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
+        e.header.type = CLAP_EVENT_PARAM_VALUE;
+        e.param_id = (clap_id)id;
+        e.note_id = -1; e.port_index = -1; e.channel = -1; e.key = -1;
+        e.value = v;
+        out->try_push(out, &e.header);
+    }
+    atomic_store_explicit(&p->pend_r, r, memory_order_release);
+}
+#endif
 
 /* CC que chegam do host: os do app (roda de mod., volume, ressonância,
    corte); sustain e "all notes off" vão como evento */
@@ -213,13 +271,26 @@ static bool p_init(const clap_plugin_t *pl)
     /* no plugin a guitarra é a entrada natural (MIDI funciona junto) e o
        gate fica num valor seguro; o resto como no app */
     param_set(P_INPUT_MODE, 2);
+    /* o motor existe desde já (a tela pode abrir antes de ativar);
+       activate o refaz se a taxa for outra */
+    p->e = calloc(1, sizeof(Engine));
+    int ok = p->e && engine_init(p->e, 48000.0f) == 0;
     params_bind(old);
-    return true;
+#ifdef VSYNTH_GUI
+    for (int i = 0; i < P_COUNT; i++) atomic_init(&p->seen[i], atomic_load(&p->ps.values[i]));
+#endif
+    return ok;
 }
 
+#ifdef VSYNTH_GUI
+static void g_destroy(const clap_plugin_t *pl);
+#endif
 static void p_destroy(const clap_plugin_t *pl)
 {
     Inst *p = pl->plugin_data;
+#ifdef VSYNTH_GUI
+    g_destroy(pl);
+#endif
     if (p->e) { engine_free(p->e); free(p->e); }
     free(p->in);
     free(p->out);
@@ -230,17 +301,19 @@ static bool p_activate(const clap_plugin_t *pl, double sr, uint32_t min_frames, 
 {
     (void)min_frames;
     Inst *p = pl->plugin_data;
-    if (p->e) { engine_free(p->e); free(p->e); p->e = NULL; }
     free(p->in);
     free(p->out);
     p->sr = sr;
     p->max_frames = max_frames ? max_frames : 4096;
     p->in  = calloc(p->max_frames, sizeof(float));
     p->out = calloc((size_t)p->max_frames * 2, sizeof(float));
-    p->e   = calloc(1, sizeof(Engine));
     if (!p->in || !p->out || !p->e) return false;
     ParamSet *old = params_bind(&p->ps);
-    int ok = engine_init(p->e, (float)sr) == 0;
+    int ok = 1;
+    if (p->e->sr != (float)sr) { /* mesma struct: a tela continua apontando para ela */
+        engine_free(p->e);
+        ok = engine_init(p->e, (float)sr) == 0;
+    }
     if (ok) {
         guitar_start(&p->e->guitar);
         atomic_store(&p->e->cap_channel, 0);
@@ -317,6 +390,9 @@ static clap_process_status p_process(const clap_plugin_t *pl, const clap_process
         pos = next;
     }
     while (ei < nev) handle_event(p, pr->in_events->get(pr->in_events, ei++));
+#ifdef VSYNTH_GUI
+    push_gui_changes(p, pr->out_events);
+#endif
 
     params_bind(old);
     return CLAP_PROCESS_CONTINUE;
@@ -431,8 +507,12 @@ static bool pa_from_text(const clap_plugin_t *pl, clap_id id, const char *text, 
 }
 static void pa_flush(const clap_plugin_t *pl, const clap_input_events_t *in, const clap_output_events_t *out)
 {
-    (void)out;
     Inst *p = pl->plugin_data;
+#ifdef VSYNTH_GUI
+    push_gui_changes(p, out);
+#else
+    (void)out;
+#endif
     uint32_t n = in ? in->size(in) : 0;
     for (uint32_t i = 0; i < n; i++) {
         const clap_event_header_t *h = in->get(in, i);
@@ -506,6 +586,206 @@ static const clap_plugin_state_t s_state = {st_save, st_load};
 static uint32_t lat_get(const clap_plugin_t *pl) { (void)pl; return 0; }
 static const clap_plugin_latency_t s_latency = {lat_get};
 
+#ifdef VSYNTH_GUI
+/* ---------- interface ---------- */
+static int param_visible(int id);
+
+static void preset_dir(char *buf, size_t cap)
+{
+    char base[900] = "";
+#if defined(_WIN32)
+    const char *a = getenv("APPDATA");
+    snprintf(base, sizeof base, "%s\\VirtualSynth", a ? a : ".");
+    mkdir_one(base);
+    snprintf(buf, cap, "%s\\presets", base);
+#elif defined(__APPLE__)
+    const char *h = getenv("HOME");
+    snprintf(base, sizeof base, "%s/Library/Application Support/Virtual Synth", h ? h : ".");
+    mkdir_one(base);
+    snprintf(buf, cap, "%s/presets", base);
+#else
+    const char *x = getenv("XDG_DATA_HOME"), *h = getenv("HOME");
+    if (x && x[0]) snprintf(base, sizeof base, "%s/VirtualSynth", x);
+    else {
+        char tmp[900];
+        snprintf(tmp, sizeof tmp, "%s/.local", h ? h : ".");
+        mkdir_one(tmp);
+        snprintf(tmp, sizeof tmp, "%s/.local/share", h ? h : ".");
+        mkdir_one(tmp);
+        snprintf(base, sizeof base, "%s/.local/share/VirtualSynth", h ? h : ".");
+    }
+    mkdir_one(base);
+    snprintf(buf, cap, "%s/presets", base);
+#endif
+    mkdir_one(buf);
+}
+
+/* um quadro da tela: desenha e manda ao host o que mudou */
+static void gui_frame_cb(void *user)
+{
+    Inst *p = user;
+    ParamSet *old = params_bind(&p->ps);
+    gui_plugin_frame(p->gui);
+    params_bind(old);
+    if (p->win) plugwin_keyboard(p->win, gui_plugin_typing(p->gui));
+    int any = 0;
+    for (int i = 0; i < P_COUNT; i++) {
+        if (!param_visible(i)) continue;
+        float v = atomic_load(&p->ps.values[i]);
+        if (v == atomic_load(&p->seen[i])) continue;
+        atomic_store(&p->seen[i], v);
+        unsigned w = atomic_load_explicit(&p->pend_w, memory_order_relaxed);
+        if (w - atomic_load_explicit(&p->pend_r, memory_order_acquire) >= 256) break; /* cheio: manda no próximo */
+        p->pend[w & 255].id = i;
+        p->pend[w & 255].v = v;
+        atomic_store_explicit(&p->pend_w, w + 1, memory_order_release);
+        any = 1;
+    }
+    if (any) {
+        const clap_host_params_t *hp = p->host->get_extension(p->host, CLAP_EXT_PARAMS);
+        if (hp && hp->request_flush) hp->request_flush(p->host);
+    }
+}
+
+static bool g_supported(const clap_plugin_t *pl, const char *api, bool floating)
+{
+    (void)pl;
+    return !floating && !strcmp(api, plugwin_api());
+}
+static bool g_preferred(const clap_plugin_t *pl, const char **api, bool *floating)
+{
+    (void)pl;
+    *api = plugwin_api();
+    *floating = false;
+    return true;
+}
+static bool g_create(const clap_plugin_t *pl, const char *api, bool floating)
+{
+    Inst *p = pl->plugin_data;
+    if (floating || strcmp(api, plugwin_api()) || p->gui) return false;
+    char dir[1024];
+    preset_dir(dir, sizeof dir);
+    p->rl = rls_create();
+    if (!p->rl) return false;
+    RlContext *o = rls_bind(p->rl);
+    ParamSet *old = params_bind(&p->ps);
+    p->gui = gui_plugin_create(p->e, dir);
+    params_bind(old);
+    rls_bind(o);
+    if (!p->gui) { rls_destroy(p->rl); p->rl = NULL; return false; }
+    if (!p->gw) { p->gw = UI_W_DEFAULT; p->gh = UI_H_DEFAULT; }
+    if (p->gscale <= 0) p->gscale = 1.0;
+    return true;
+}
+static void g_destroy(const clap_plugin_t *pl)
+{
+    Inst *p = pl->plugin_data;
+    if (p->has_timer) {
+        const clap_host_timer_support_t *ht = p->host->get_extension(p->host, CLAP_EXT_TIMER_SUPPORT);
+        if (ht) ht->unregister_timer(p->host, p->timer);
+        p->has_timer = 0;
+    }
+    if (p->win) { plugwin_destroy(p->win); p->win = NULL; }
+    if (p->gui) {
+        RlContext *o = rls_bind(p->rl);
+        gui_plugin_destroy(p->gui);
+        rls_bind(o);
+        p->gui = NULL;
+    }
+    if (p->rl) { rls_destroy(p->rl); p->rl = NULL; }
+}
+static bool g_set_scale(const clap_plugin_t *pl, double scale)
+{
+    Inst *p = pl->plugin_data;
+    if (scale <= 0) return false;
+    if (!strcmp(plugwin_api(), "cocoa")) return false; /* no Mac o sistema cuida */
+    /* o tamanho acompanha a escala da tela (125%, 150%...) */
+    p->gw = (uint32_t)(p->gw / p->gscale * scale + 0.5);
+    p->gh = (uint32_t)(p->gh / p->gscale * scale + 0.5);
+    p->gscale = scale;
+    if (p->win) plugwin_set_size(p->win, (int)p->gw, (int)p->gh, scale);
+    return true;
+}
+static bool g_get_size(const clap_plugin_t *pl, uint32_t *w, uint32_t *h)
+{
+    Inst *p = pl->plugin_data;
+    *w = p->gw ? p->gw : UI_W_DEFAULT;
+    *h = p->gh ? p->gh : UI_H_DEFAULT;
+    return true;
+}
+static bool g_can_resize(const clap_plugin_t *pl) { (void)pl; return true; }
+static bool g_hints(const clap_plugin_t *pl, clap_gui_resize_hints_t *h)
+{
+    (void)pl;
+    h->can_resize_horizontally = true;
+    h->can_resize_vertically = true;
+    h->preserve_aspect_ratio = true;
+    h->aspect_ratio_width = 1280;
+    h->aspect_ratio_height = 800;
+    return true;
+}
+static bool g_adjust(const clap_plugin_t *pl, uint32_t *w, uint32_t *h)
+{
+    Inst *p = pl->plugin_data;
+    double s = p->gscale > 0 ? p->gscale : 1.0;
+    uint32_t minw = (uint32_t)(640 * s);
+    if (*w < minw) *w = minw;
+    /* mantém 16:10, pelo lado que couber */
+    uint32_t hw = (uint32_t)(*w * 800.0 / 1280.0 + 0.5);
+    if (hw > *h && *h >= (uint32_t)(400 * s)) *w = (uint32_t)(*h * 1280.0 / 800.0 + 0.5);
+    *h = (uint32_t)(*w * 800.0 / 1280.0 + 0.5);
+    return true;
+}
+static bool g_set_size(const clap_plugin_t *pl, uint32_t w, uint32_t h)
+{
+    Inst *p = pl->plugin_data;
+    p->gw = w;
+    p->gh = h;
+    if (p->win) plugwin_set_size(p->win, (int)w, (int)h, p->gscale);
+    return true;
+}
+static bool g_set_parent(const clap_plugin_t *pl, const clap_window_t *win)
+{
+    Inst *p = pl->plugin_data;
+    if (!p->gui || p->win) return false;
+    uintptr_t parent = 0;
+    if (!strcmp(plugwin_api(), "x11")) parent = (uintptr_t)win->x11;
+    else parent = (uintptr_t)win->ptr;
+    p->win = plugwin_create(parent, (int)p->gw, (int)p->gh, p->gscale, p->rl, gui_frame_cb, p);
+    if (!p->win) return false;
+    /* ~30 quadros por segundo pelo timer do host; sem ele, a janela usa o seu */
+    const clap_host_timer_support_t *ht = p->host->get_extension(p->host, CLAP_EXT_TIMER_SUPPORT);
+    if (ht && ht->register_timer && ht->register_timer(p->host, 33, &p->timer)) p->has_timer = 1;
+    else plugwin_own_timer(p->win, true);
+    plugwin_tick(p->win);
+    return true;
+}
+static bool g_set_transient(const clap_plugin_t *pl, const clap_window_t *w) { (void)pl; (void)w; return false; }
+static void g_title(const clap_plugin_t *pl, const char *t) { (void)pl; (void)t; }
+static bool g_show(const clap_plugin_t *pl)
+{
+    Inst *p = pl->plugin_data;
+    if (p->win) plugwin_show(p->win, true);
+    return p->win != NULL;
+}
+static bool g_hide(const clap_plugin_t *pl)
+{
+    Inst *p = pl->plugin_data;
+    if (p->win) plugwin_show(p->win, false);
+    return p->win != NULL;
+}
+static const clap_plugin_gui_t s_gui = {g_supported, g_preferred, g_create, g_destroy, g_set_scale, g_get_size,
+                                        g_can_resize, g_hints, g_adjust, g_set_size, g_set_parent, g_set_transient,
+                                        g_title, g_show, g_hide};
+
+static void on_timer(const clap_plugin_t *pl, clap_id id)
+{
+    Inst *p = pl->plugin_data;
+    if (p->has_timer && id == p->timer && p->win) plugwin_tick(p->win);
+}
+static const clap_plugin_timer_support_t s_timer = {on_timer};
+#endif
+
 static const void *p_ext(const clap_plugin_t *pl, const char *id)
 {
     (void)pl;
@@ -514,6 +794,10 @@ static const void *p_ext(const clap_plugin_t *pl, const char *id)
     if (!strcmp(id, CLAP_EXT_PARAMS)) return &s_params;
     if (!strcmp(id, CLAP_EXT_STATE)) return &s_state;
     if (!strcmp(id, CLAP_EXT_LATENCY)) return &s_latency;
+#ifdef VSYNTH_GUI
+    if (!strcmp(id, CLAP_EXT_GUI)) return &s_gui;
+    if (!strcmp(id, CLAP_EXT_TIMER_SUPPORT)) return &s_timer;
+#endif
     return NULL;
 }
 

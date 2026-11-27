@@ -34,9 +34,20 @@
 enum { DD_PRESET = 1, DD_OUT, DD_IN, DD_MIDI, DD_MOUT, DD_CH, DD_MOD = 20 };
 enum { TB_SAVE = 1, TB_SEARCH };
 
-typedef struct {
+#ifdef GUI_PLUGIN
+#pragma GCC diagnostic ignored "-Wunused-function" /* partes do app que o plugin não usa */
+#define PLUGIN 1 /* dentro da DAW: sem dispositivos, gravação, looper nem MIDI learn */
+#else
+#define PLUGIN 0
+#endif
+
+/* pasta dos presets do usuário (no plugin, a pasta de dados do usuário) */
+static char g_preset_dir[1024] = PRESET_DIR;
+
+typedef struct Gui {
     Engine *e;
     int     tab;
+    UiState *ui; /* plugin: estado dos widgets desta janela */
 
     /* dispositivos */
     char out_items[4096], in_items[4096], midi_items[4096], mout_items[4096], ch_items[256];
@@ -78,7 +89,7 @@ typedef struct {
     float    rec_buf[16384];
 
     /* status e medidores */
-    char   status[640];
+    char   status[1400];
     double status_time;
     float  out_level;
     int    tuner_note;
@@ -240,16 +251,16 @@ static int cmp_str(const void *a, const void *b) { return strcmp((const char *)a
 static void build_preset_list(Gui *g)
 {
     g->n_user = 0;
-    if (DirectoryExists(PRESET_DIR)) {
-        FilePathList fl = LoadDirectoryFilesEx(PRESET_DIR, ".txt", false);
+    if (DirectoryExists(g_preset_dir)) {
+        FilePathList fl = LoadDirectoryFilesEx(g_preset_dir, ".txt", false);
         for (unsigned i = 0; i < fl.count && g->n_user < MAX_USER_PRESETS; i++)
             snprintf(g->user_presets[g->n_user++], 128, "%s", GetFileNameWithoutExt(fl.paths[i]));
         UnloadDirectoryFiles(fl);
     }
     qsort(g->user_presets, g->n_user, sizeof g->user_presets[0], cmp_str);
     for (int i = 0; i < g->n_user; i++) {
-        char path[300];
-        snprintf(path, sizeof path, PRESET_DIR "/%s.txt", g->user_presets[i]);
+        char path[1200];
+        snprintf(path, sizeof path, "%s/%s.txt", g_preset_dir, g->user_presets[i]);
         g->user_cat[i] = preset_file_category(path);
     }
     g->preset_items[0] = 0;
@@ -292,8 +303,8 @@ static void load_preset(Gui *g, int idx)
         factory_preset_apply(idx);
         snprintf(g->preset_name, sizeof g->preset_name, "%s", factory_preset_name(idx));
     } else {
-        char path[300];
-        snprintf(path, sizeof path, PRESET_DIR "/%s.txt", g->user_presets[idx - nf]);
+        char path[1200];
+        snprintf(path, sizeof path, "%s/%s.txt", g_preset_dir, g->user_presets[idx - nf]);
         preset_load(path);
         snprintf(g->preset_name, sizeof g->preset_name, "%s", g->user_presets[idx - nf]);
     }
@@ -315,15 +326,15 @@ static void save_preset(Gui *g, const char *name)
     while (j > 0 && clean[j - 1] == ' ') j--;
     clean[j] = 0;
     if (!j) { set_status(g, "Digite um nome para o preset"); return; }
-    MakeDirectory(PRESET_DIR);
-    char path[300];
-    snprintf(path, sizeof path, PRESET_DIR "/%s.txt", clean);
+    MakeDirectory(g_preset_dir);
+    char path[1200];
+    snprintf(path, sizeof path, "%s/%s.txt", g_preset_dir, clean);
     if (preset_save(path, g->save_cat) == 0) {
         build_preset_list(g);
         for (int i = 0; i < g->n_user; i++)
             if (!strcmp(g->user_presets[i], clean)) g->preset_active = factory_preset_count() + i;
         snprintf(g->preset_name, sizeof g->preset_name, "%s", clean);
-        char m[360];
+        char m[1300];
         snprintf(m, sizeof m, "Preset salvo em %s", path);
         set_status(g, m);
     } else {
@@ -452,7 +463,7 @@ static void toggle_recording(Gui *g)
 {
     if (!recorder_active(&g->rec)) {
         MakeDirectory(REC_DIR);
-        char path[256], stamp[32];
+        char path[1200], stamp[32];
         time_t t = time(NULL);
         strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", localtime(&t));
         snprintf(path, sizeof path, REC_DIR "/gravacao-%s.wav", stamp);
@@ -548,7 +559,7 @@ static void draw_piano(Gui *g, Rectangle area)
     /* faixa azul: onde está o teclado do computador */
     int base = 12 * (param_geti(P_KEYS_OCTAVE) + 1);
     int lo = base < PIANO_LOW ? PIANO_LOW : base, hi = base + 28 > PIANO_HIGH ? PIANO_HIGH : base + 28;
-    if (lo <= PIANO_HIGH) {
+    if (!PLUGIN && lo <= PIANO_HIGH) {
         Rectangle a = key_rect(area, lo, ww), b = key_rect(area, hi, ww);
         ui_rect((Rectangle){a.x, area.y - 9, b.x + b.width - a.x, 4}, 2, Fade(C_CYAN, 0.8f));
     }
@@ -782,12 +793,13 @@ static void draw_top_bar(Gui *g)
     if (ui_button(pan, "Pânico", UI_BTN_NORMAL)) {
         Event off = {EV_ALL_OFF, SRC_KEYS, 0, 0, 0};
         evq_push(&g->e->q_ui, off);
-        looper_command(&g->e->looper, LCMD_STOP);
+        if (!PLUGIN) looper_command(&g->e->looper, LCMD_STOP);
         set_status(g, "Todas as notas foram silenciadas");
     }
     ui_tooltip(pan, "Silencia todas as notas presas e para o looper.");
     x -= 84 + 8;
 
+    if (PLUGIN) return; /* gravar, MIDI learn e áudio ficam com a DAW */
     bool rec = recorder_active(&g->rec);
     char rl[48];
     if (rec) {
@@ -881,6 +893,14 @@ static void input_guitar(Gui *g, Rectangle p)
 {
     Engine *e = g->e;
     float x = p.x + 14, w = p.width - 28, y = p.y + 92;
+    if (PLUGIN) {
+        /* na DAW a guitarra é a própria trilha */
+        Rectangle lr = {x, y + 17, w, 34};
+        ui_text("Entrada", x, y, 11, UI_REGULAR, C_TEXT2);
+        ui_rect(lr, 9, C_WELL);
+        ui_text("Canal esquerdo da trilha", x + 10, y + 26, 12.5f, UI_REGULAR, C_TEXT);
+        ui_tooltip(lr, "A guitarra entra pelo canal esquerdo da trilha (ou trilha mono). Arme a trilha com o monitoramento ligado.");
+    } else {
     ui_text("Interface de áudio", x, y, 11, UI_REGULAR, C_TEXT2);
     ui_text("Canal", x + w - 64, y, 11, UI_REGULAR, C_TEXT2);
     if (out_is_asio(g)) {
@@ -895,6 +915,7 @@ static void input_guitar(Gui *g, Rectangle p)
     } else if (ui_dropdown((Rectangle){x, y + 17, w - 72, 34}, g->in_items, &g->in_active, DD_IN)) apply_audio(g);
     if (ui_dropdown((Rectangle){x + w - 64, y + 17, 64, 34}, g->ch_items, &g->in_ch, DD_CH)) atomic_store(&e->cap_channel, g->in_ch);
     ui_tooltip((Rectangle){x + w - 64, y + 17, 64, 34}, "Em qual entrada da interface a guitarra está ligada.");
+    }
 
     y += 64;
     float db = atomic_load(&e->guitar.st_db), gate = param_get(P_GTR_GATE);
@@ -911,7 +932,7 @@ static void input_guitar(Gui *g, Rectangle p)
     if (g->calibrating) snprintf(cl, sizeof cl, "Medindo... %d", (int)ceil(2.0 - (now - g->calib_start)));
     else snprintf(cl, sizeof cl, "Calibrar gate");
     if (ui_button(cb, cl, g->calibrating ? UI_BTN_AMBER : UI_BTN_NORMAL) && !g->calibrating) {
-        if (engine_capture_channels(e) == 0)
+        if (!PLUGIN && engine_capture_channels(e) == 0)
             set_status(g, "Sem entrada de áudio aberta: escolha a entrada da guitarra antes de calibrar.");
         else {
             guitar_calib_start(&e->guitar, 2.0f);
@@ -936,7 +957,8 @@ static void input_guitar(Gui *g, Rectangle p)
             set_status(g, msg);
         } else if (now - g->calib_start > 4.0) { /* o áudio parou no meio */
             g->calibrating = 0;
-            set_status(g, "Calibração não terminou: a entrada de áudio parou. Confira o dispositivo.");
+            set_status(g, PLUGIN ? "Calibração não terminou: o áudio parou (o projeto está tocando ou a trilha armada?)."
+                                 : "Calibração não terminou: a entrada de áudio parou. Confira o dispositivo.");
         }
     }
     Rectangle m = {x, y + 18, w, 12};
@@ -1075,6 +1097,20 @@ static void draw_input_panel(Gui *g)
     Rectangle p = {12, 68, 300, 496};
     ui_panel(p, 16, C_PANEL, C_BORDER);
     ui_caption("ENTRADA", p.x + 14, p.y + 16, C_TEXT2);
+    if (PLUGIN) {
+        /* guitarra e MIDI chegam juntos pela trilha */
+        if (param_geti(P_INPUT_MODE) != 2) param_set(P_INPUT_MODE, 2);
+        float db = atomic_load(&g->e->guitar.st_db);
+        bool sig = db > param_get(P_GTR_GATE);
+        ui_led(p.x + p.width - 84, p.y + 21, 3.5f, sig, C_GREEN);
+        ui_text(sig ? "com sinal" : "sem sinal", p.x + p.width - 74, p.y + 14, 11, UI_REGULAR, C_TEXT2);
+        Rectangle info = {p.x + 14, p.y + 40, p.width - 28, 38};
+        ui_rect(info, 10, C_CYAN_BG);
+        ui_text_center("Guitarra + MIDI da trilha", info, 13, UI_SEMIBOLD, C_CYAN_HI);
+        ui_tooltip(info, "No plugin, a guitarra vem do áudio da trilha e as notas MIDI da trilha também tocam o synth.");
+        input_guitar(g, p);
+        return;
+    }
     int mode = param_geti(P_INPUT_MODE);
     bool ok = g->e->dev_ok && (mode != 1 || midi_is_open());
     ui_led(p.x + p.width - 84, p.y + 21, 3.5f, ok, C_GREEN);
@@ -1264,7 +1300,7 @@ static void tab_effects(Gui *g)
         int t = param_geti(P_FX_ORDER0 + s);
         if (param_geti(fx_param_on(t))) { names[n] = fx_name(t); cols[n++] = FX_COLOR[t]; }
     }
-    names[n] = "Looper"; cols[n++] = C_TEXT;
+    if (!PLUGIN) { names[n] = "Looper"; cols[n++] = C_TEXT; }
     names[n] = "Saída"; cols[n++] = C_TEXT;
     for (int i = 0; i < n; i++) {
         float tw = ui_text_width(names[i], 12, UI_SEMIBOLD) + 18;
@@ -1372,6 +1408,16 @@ static void tab_modulation(Gui *g)
 static void tempo_card(Gui *g, Rectangle r)
 {
     ui_card(r, "TEMPO", C_AMBER);
+    if (PLUGIN) {
+        Rectangle st = {r.x + 14, r.y + 42, r.width - 28, 56};
+        ui_panel(st, 12, C_WELL, C_BORDER);
+        char t[16];
+        snprintf(t, sizeof t, "%d", param_geti(P_BPM));
+        ui_text_center(t, (Rectangle){st.x, st.y + 4, st.width, 34}, 28, UI_BOLD, C_TEXT);
+        ui_text_center("BPM do projeto", (Rectangle){st.x, st.y + 36, st.width, 14}, 10, UI_SEMIBOLD, C_TEXT2);
+        ui_tooltip(st, "No plugin, o andamento vem da DAW (arpejador e delay sincronizado seguem o projeto).");
+        return;
+    }
     int beat = atomic_load(&g->e->beat);
     for (int i = 0; i < 4; i++) ui_led(r.x + r.width - 74 + i * 17.0f, r.y + 19, 5, i == beat, i == 0 ? C_AMBER : C_TEXT);
     bool wide = r.width >= 300;
@@ -1554,8 +1600,38 @@ static void tab_looper(Gui *g)
 }
 
 /* ---------- saída MIDI ---------- */
+static void tab_midi_out_plugin(Gui *g)
+{
+    (void)g;
+    Rectangle area = {324, 118, 944, 446};
+    Rectangle c = {area.x, area.y, 470, area.height};
+    ui_card(c, "SAÍDA MIDI", C_CYAN);
+    float x = c.x + 14, w = c.width - 28;
+    ui_text("Enviar", x, c.y + 42, 11, UI_REGULAR, C_TEXT2);
+    int src = param_geti(P_MOUT_SRC);
+    if (ui_segmented((Rectangle){x, c.y + 60, w, 38}, "Nada;Guitarra;Tudo", &src, C_CYAN, C_CYAN_BG, C_CYAN_HI)) param_set(P_MOUT_SRC, (float)src);
+    ui_tooltip((Rectangle){x, c.y + 60, w, 38}, "Guitarra: só a nota tocada, com bends. Tudo: também MIDI da trilha, harmonia e arpejo.");
+    ui_knob(x + w * 0.25f, c.y + 160, 46, P_MOUT_CH, C_CYAN, "Canal");
+    ui_knob(x + w * 0.62f, c.y + 160, 46, P_MOUT_BEND, C_CYAN, "Faixa do bend");
+    ui_tooltip((Rectangle){x + w * 0.62f - 34, c.y + 132, 68, 80}, "Configure o mesmo valor (em semitons) no instrumento que vai receber.");
+    ui_panel((Rectangle){x, c.y + c.height - 98, w, 84}, 10, C_WELL, C_BORDER);
+    ui_text("A nota sai uns 20-30 ms depois da palhetada", x + 12, c.y + c.height - 86, 12, UI_REGULAR, C_TEXT2);
+    ui_text("(tempo de reconhecer). Para ouvir só o outro", x + 12, c.y + c.height - 68, 12, UI_REGULAR, C_TEXT2);
+    ui_text("instrumento, ponha o Nível do synth em 0.", x + 12, c.y + c.height - 50, 12, UI_REGULAR, C_TEXT2);
+
+    Rectangle h = {c.x + c.width + 10, area.y, area.width - c.width - 10, area.height};
+    ui_card(h, "GRAVAR AS NOTAS NO REAPER", C_CYAN);
+    static const char *how[] = {
+        "1. Em Enviar, escolha Guitarra.", "2. Crie outra trilha para o MIDI.", "3. Na trilha da guitarra, abra Routing",
+        "    (botão I/O) e adicione um Send para", "    a trilha nova: Audio = None,", "    MIDI = All -> All.",
+        "4. Na trilha nova, ponha o instrumento", "    que quiser e arme a gravação", "    (Record: MIDI).",
+        "5. Toque: as notas vão para lá."};
+    for (int i = 0; i < 10; i++) ui_text(how[i], h.x + 16, h.y + 44 + i * 22.0f, 12.5f, UI_REGULAR, i == 0 ? C_TEXT : C_TEXT2);
+}
+
 static void tab_midi_out(Gui *g)
 {
+    if (PLUGIN) { tab_midi_out_plugin(g); return; }
     Rectangle area = {324, 118, 944, 446};
     Rectangle c = {area.x, area.y, 470, area.height};
     ui_card(c, "SAÍDA MIDI", C_CYAN);
@@ -1930,9 +2006,14 @@ static void draw_tabs(Gui *g)
     Rectangle bar = {324, 68, 944, 40};
     ui_panel(bar, 12, C_PANEL, C_BORDER);
     static const char *names[] = {"Som", "Efeitos", "Modulação", "Arp / Harmonia", "Looper", "Saída MIDI"};
-    float w = (bar.width - 8 - 5 * 4) / 6;
-    for (int i = 0; i < 6; i++) {
-        Rectangle t = {bar.x + 4 + i * (w + 4), bar.y + 4, w, 32};
+    /* no plugin não há looper (a DAW grava) */
+    static const int app_tabs[] = {0, 1, 2, 3, 4, 5}, plugin_tabs[] = {0, 1, 2, 3, 5};
+    const int *ids = PLUGIN ? plugin_tabs : app_tabs;
+    int n = PLUGIN ? 5 : 6;
+    float w = (bar.width - 8 - (n - 1) * 4) / n;
+    for (int k = 0; k < n; k++) {
+        int i = ids[k];
+        Rectangle t = {bar.x + 4 + k * (w + 4), bar.y + 4, w, 32};
         bool on = g->tab == i, hov = ui_hover(t);
         if (on) { ui_rect(t, 9, C_AMBER_BG); ui_rect_lines(t, 9, 1, (Color){92, 68, 22, 255}); }
         else if (hov) ui_rect(t, 9, C_CTRL);
@@ -1951,6 +2032,12 @@ static void draw_status_bar(Gui *g)
         return;
     }
     char t[200];
+    if (PLUGIN) {
+        snprintf(t, sizeof t, "Plugin · %.0f Hz", g->e->sr);
+        ui_text(t, 16, y, 11.5f, UI_REGULAR, C_TEXT2);
+        ui_text_right("Guitarra pelo canal esquerdo · MIDI da trilha toca junto", UI_W - 16, y, 11.5f, UI_REGULAR, C_TEXT2);
+        return;
+    }
     ui_led(20, y + 7, 3.5f, g->e->dev_ok, C_GREEN);
     if (g->e->dev_ok) snprintf(t, sizeof t, "Áudio %u Hz · buffer %.1f ms", g->e->dev_rate, g->e->dev_latency_ms);
     else snprintf(t, sizeof t, "Áudio desligado");
@@ -1964,6 +2051,71 @@ static void draw_status_bar(Gui *g)
                   ui_learn() ? UI_SEMIBOLD : UI_REGULAR, ui_learn() ? C_AMBER : C_TEXT2);
 }
 
+/* Um quadro da interface: o app chama no seu laço; o plugin, a cada
+   redesenho da janela que a DAW deu. */
+static void gui_frame(Gui *g)
+{
+#ifndef GUI_PLUGIN
+    {
+        int mode = param_geti(P_INPUT_MODE);
+        if (mode != g->last_mode) {
+            g->last_mode = mode;
+            apply_audio(g);
+            apply_midi(g);
+            static const char *names[] = {"Entrada: teclado do computador / piano", "Entrada: MIDI", "Entrada: guitarra / microfone"};
+            if (!g->audio_error[0]) set_status(g, names[mode]);
+        }
+        int msrc = param_geti(P_MOUT_SRC);
+        if ((msrc != 0) != (g->mout_last_src != 0)) apply_midi_out(g);
+        g->mout_last_src = msrc;
+        if (ui_learn() && ui_learn_target() >= 0) {
+            int cnt, cc = midi_last_cc(&cnt);
+            if (cnt != g->learn_seen && cc >= 0) {
+                midi_map(cc, ui_learn_target());
+                midi_map_save("midi-learn.txt");
+                char m[160];
+                snprintf(m, sizeof m, "MIDI learn: CC%d -> %s", cc, param_def(ui_learn_target())->label);
+                set_status(g, m);
+                ui_set_learn_target(-1);
+                g->learn_seen = cnt;
+            }
+        }
+        if (recorder_active(&g->rec)) drain_recording(g);
+        latency_update(g);
+        handle_keyboard(g);
+        if (IsKeyPressed(KEY_F1)) ToggleFullscreen();
+    }
+#endif
+
+    /* janelas por cima bloqueiam o resto */
+    if (g->audio_open) ui_set_modal(true, audio_rect());
+    else if (g->save_open) ui_set_modal(true, save_rect());
+    else if (g->browser_open) ui_set_modal(true, browser_rect());
+    else ui_set_modal(false, (Rectangle){0});
+
+    ui_begin_frame(C_BG);
+    draw_top_bar(g);
+    draw_input_panel(g);
+    draw_tabs(g);
+    switch (g->tab) {
+    case 0: tab_sound(g); break;
+    case 1: tab_effects(g); break;
+    case 2: tab_modulation(g); break;
+    case 3: tab_arp(g); break;
+    case 4: tab_looper(g); break;
+    case 5: tab_midi_out(g); break;
+    }
+    draw_scope(g, (Rectangle){12, 572, 1256, 46});
+    draw_piano(g, (Rectangle){12, 634, 1256, 130});
+    draw_status_bar(g);
+    ui_modal_content();
+    if (g->save_open) draw_save_popup(g);
+    if (g->browser_open) draw_preset_browser(g);
+    if (g->audio_open) draw_audio_dialog(g);
+    ui_end_frame();
+}
+
+#ifndef GUI_PLUGIN
 int gui_run(Engine *e, const GuiOptions *opt)
 {
     static Gui gs;
@@ -2027,61 +2179,7 @@ int gui_run(Engine *e, const GuiOptions *opt)
 
     int frame = 0;
     while (!WindowShouldClose()) {
-        int mode = param_geti(P_INPUT_MODE);
-        if (mode != g->last_mode) {
-            g->last_mode = mode;
-            apply_audio(g);
-            apply_midi(g);
-            static const char *names[] = {"Entrada: teclado do computador / piano", "Entrada: MIDI", "Entrada: guitarra / microfone"};
-            if (!g->audio_error[0]) set_status(g, names[mode]);
-        }
-        int msrc = param_geti(P_MOUT_SRC);
-        if ((msrc != 0) != (g->mout_last_src != 0)) apply_midi_out(g);
-        g->mout_last_src = msrc;
-        if (ui_learn() && ui_learn_target() >= 0) {
-            int cnt, cc = midi_last_cc(&cnt);
-            if (cnt != g->learn_seen && cc >= 0) {
-                midi_map(cc, ui_learn_target());
-                midi_map_save("midi-learn.txt");
-                char m[160];
-                snprintf(m, sizeof m, "MIDI learn: CC%d -> %s", cc, param_def(ui_learn_target())->label);
-                set_status(g, m);
-                ui_set_learn_target(-1);
-                g->learn_seen = cnt;
-            }
-        }
-        if (recorder_active(&g->rec)) drain_recording(g);
-        latency_update(g);
-        handle_keyboard(g);
-        if (IsKeyPressed(KEY_F1)) ToggleFullscreen();
-
-        /* janelas por cima bloqueiam o resto */
-        if (g->audio_open) ui_set_modal(true, audio_rect());
-        else if (g->save_open) ui_set_modal(true, save_rect());
-        else if (g->browser_open) ui_set_modal(true, browser_rect());
-        else ui_set_modal(false, (Rectangle){0});
-
-        ui_begin_frame(C_BG);
-        draw_top_bar(g);
-        draw_input_panel(g);
-        draw_tabs(g);
-        switch (g->tab) {
-        case 0: tab_sound(g); break;
-        case 1: tab_effects(g); break;
-        case 2: tab_modulation(g); break;
-        case 3: tab_arp(g); break;
-        case 4: tab_looper(g); break;
-        case 5: tab_midi_out(g); break;
-        }
-        draw_scope(g, (Rectangle){12, 572, 1256, 46});
-        draw_piano(g, (Rectangle){12, 634, 1256, 130});
-        draw_status_bar(g);
-        ui_modal_content();
-        if (g->save_open) draw_save_popup(g);
-        if (g->browser_open) draw_preset_browser(g);
-        if (g->audio_open) draw_audio_dialog(g);
-        ui_end_frame();
-
+        gui_frame(g);
         frame++;
         if (opt && opt->screenshot && frame == opt->screenshot_frame) ui_screenshot(opt->screenshot);
         if (opt && opt->exit_frame && frame >= opt->exit_frame) break;
@@ -2093,3 +2191,64 @@ int gui_run(Engine *e, const GuiOptions *opt)
     CloseWindow();
     return 0;
 }
+#endif
+
+#ifdef GUI_PLUGIN
+/* ------------------------------------------------------------------ */
+/* Plugin: a mesma interface numa janela da DAW                        */
+/* ------------------------------------------------------------------ */
+Gui *gui_plugin_create(Engine *e, const char *preset_dir)
+{
+    Gui *g = calloc(1, sizeof *g);
+    if (!g) return NULL;
+    g->e = e;
+    g->mouse_note = -1;
+    g->drag_fx = -1;
+    for (int i = 0; i < 64; i++) g->key_note[i] = -1;
+    snprintf(g->preset_name, sizeof g->preset_name, "Inicial");
+    if (preset_dir && preset_dir[0]) snprintf(g_preset_dir, sizeof g_preset_dir, "%s", preset_dir);
+    g->ui = ui_state_create();
+    UiState *old = ui_bind(g->ui);
+    ui_init();
+    ui_set_exact_scale(true);
+    ui_bind(old);
+    build_preset_list(g);
+    set_status(g, "Virtual Synth na DAW: a guitarra vem da trilha e o MIDI da trilha também toca.");
+    return g;
+}
+
+void gui_plugin_frame(Gui *g)
+{
+    UiState *old = ui_bind(g->ui);
+    gui_frame(g);
+    ui_bind(old);
+}
+
+void gui_plugin_destroy(Gui *g)
+{
+    if (!g) return;
+    UiState *old = ui_bind(g->ui);
+    ui_shutdown();
+    ui_bind(old);
+    ui_state_destroy(g->ui);
+    free(g);
+}
+
+bool gui_plugin_typing(Gui *g)
+{
+    UiState *old = ui_bind(g->ui);
+    bool t = ui_typing();
+    ui_bind(old);
+    return t;
+}
+
+void gui_plugin_screenshot(Gui *g, const char *path)
+{
+    UiState *old = ui_bind(g->ui);
+    ui_screenshot(path);
+    ui_bind(old);
+}
+#endif
+#ifdef GUI_PLUGIN
+void gui_plugin_set_tab(Gui *g, int tab) { g->tab = tab; }
+#endif

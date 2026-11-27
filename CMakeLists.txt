@@ -153,9 +153,38 @@ if(SYNTH_PLUGIN)
     GIT_REPOSITORY https://github.com/free-audio/clap.git
     GIT_TAG 1.2.2 GIT_SHALLOW TRUE)
   FetchContent_Populate(clap)  # só os cabeçalhos
+  # Interface do plugin: a mesma do app (gui.c, ui.c), desenhada em software
+  # pelo rlsoft (src/rlsoft) numa janela filha da que a DAW dá.
+  set(RLSOFT_STB ${CMAKE_BINARY_DIR}/rlsoft_stb)
+  file(COPY ${raylib_SOURCE_DIR}/src/external/stb_truetype.h ${raylib_SOURCE_DIR}/src/external/stb_image_write.h
+       DESTINATION ${RLSOFT_STB})
+  set(PLUGIN_GUI_SOURCES src/gui.c src/ui.c src/rlsoft/rlsoft.c src/plugin_midi_stubs.c ${FONT_SOURCES})
+  if(WIN32)
+    list(APPEND PLUGIN_GUI_SOURCES src/plugin_gui_win32.c)
+  elseif(APPLE)
+    list(APPEND PLUGIN_GUI_SOURCES src/plugin_gui_cocoa.m)
+  else()
+    find_package(X11 REQUIRED)
+    list(APPEND PLUGIN_GUI_SOURCES src/plugin_gui_x11.c)
+  endif()
+  add_library(vsynth_gui STATIC ${PLUGIN_GUI_SOURCES})
+  # o raylib.h do rlsoft vem antes de qualquer outro
+  target_include_directories(vsynth_gui BEFORE PUBLIC src/rlsoft)
+  target_include_directories(vsynth_gui PRIVATE ${RLSOFT_STB} ${miniaudio_SOURCE_DIR})
+  target_compile_definitions(vsynth_gui PUBLIC GUI_PLUGIN VSYNTH_GUI)
+  target_link_libraries(vsynth_gui PUBLIC synthcore)
+  set_target_properties(vsynth_gui PROPERTIES C_VISIBILITY_PRESET hidden OBJC_VISIBILITY_PRESET hidden)
+  if(WIN32)
+    target_link_libraries(vsynth_gui PUBLIC gdi32 user32)
+  elseif(APPLE)
+    target_link_libraries(vsynth_gui PUBLIC "-framework Cocoa")
+  else()
+    target_link_libraries(vsynth_gui PUBLIC X11::X11)
+  endif()
+
   add_library(vsynth_clap MODULE src/plugin_clap.c)
   target_include_directories(vsynth_clap PRIVATE ${clap_SOURCE_DIR}/include)
-  target_link_libraries(vsynth_clap PRIVATE synthcore)
+  target_link_libraries(vsynth_clap PRIVATE vsynth_gui synthcore)
   set_target_properties(vsynth_clap PROPERTIES OUTPUT_NAME "VirtualSynth" C_VISIBILITY_PRESET hidden)
   if(APPLE)
     # no macOS o .clap é um bundle: VirtualSynth.clap/Contents/MacOS/VirtualSynth
@@ -198,7 +227,7 @@ if(SYNTH_PLUGIN)
     FetchContent_MakeAvailable(clapwrapper)
     add_library(vsynth_vst3 MODULE src/plugin_clap.c)
     target_include_directories(vsynth_vst3 PRIVATE ${clap_SOURCE_DIR}/include)
-    target_link_libraries(vsynth_vst3 PRIVATE synthcore)
+    target_link_libraries(vsynth_vst3 PRIVATE vsynth_gui synthcore)
     set_target_properties(vsynth_vst3 PROPERTIES C_VISIBILITY_PRESET hidden CXX_VISIBILITY_PRESET hidden PREFIX "")
     target_add_vst3_wrapper(TARGET vsynth_vst3 OUTPUT_NAME "VirtualSynth"
       SUPPORTS_ALL_NOTE_EXPRESSIONS FALSE
