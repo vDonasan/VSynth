@@ -31,7 +31,14 @@ void direct_reset(Direct *d)
     d->aenv.stage = d->fenv.stage = ENV_IDLE;
 }
 
-float direct_hz(const Direct *d) { return d->have_period && d->gate ? d->sr / d->period : 0.0f; }
+/* presa à nota confirmada pelo detector, ou seguindo os ciclos da corda */
+static int locked(const Direct *d) { return d->center > 0.0f && d->note_hz > 0.0f && d->note_gone < 0.03f * d->sr; }
+float direct_hz(const Direct *d)
+{
+    if (!d->gate) return 0.0f;
+    if (locked(d)) return d->note_hz;
+    return d->have_period ? d->sr / d->period : 0.0f;
+}
 
 static float clampf(float x, float a, float b) { return x < a ? a : (x > b ? b : x); }
 
@@ -47,7 +54,8 @@ static void set_band(Direct *d)
     d->lp_coef = 1.0f - expf(-TWO_PI * hi / d->sr);
 }
 
-void direct_process(Direct *d, const Patch *p, const float *in, float *out, int n, unsigned picks, float hint_hz)
+void direct_process(Direct *d, const Patch *p, const float *in, float *out, int n, unsigned picks,
+                    float hint_hz, int note_active)
 {
     const float sr = d->sr;
     const float gain = param_get(P_GTR_GAIN);
@@ -73,31 +81,24 @@ void direct_process(Direct *d, const Patch *p, const float *in, float *out, int 
         d->off_time = 0.0f;
         d->acc_P = 0.0f;
         d->center = 0.0f;
+        d->note_hz = 0.0f;
+        d->note_gone = 0.0f;
+        d->closed_hz = 0.0f;
         d->hint_agree = 0;
         d->env_y = 0.0f;
         d->suspect = 0;
     }
-    /* O reconhecimento (YIN) diz qual é a nota: a banda se fecha em volta
-       dela. Uma nota diferente da banda atual só muda a banda depois de 3
-       leituras seguidas (uma corda ressoando não arrasta a banda). */
-    if (hint_hz > 0.0f) d->unconfirmed = 0.0f;
+    /* O detector de notas diz qual nota está soando: a banda se fecha em
+       volta dela e o oscilador fica preso nela (bends e slides vêm junto,
+       porque a frequência dele acompanha a corda). */
     if (hint_hz > 0.0f) {
-        if (d->center <= 0.0f) d->center = hint_hz;
-        else {
-            float hs = 12.0f * log2f(hint_hz / d->center);
-            if (fabsf(hs) > 0.8f) {
-                /* slide/bend: a banda segue a nota (mesma tolerância que o
-                   teste de "ciclo longe da nota", senão a nota é cortada) */
-                if (++d->hint_agree >= 3) { d->center = hint_hz; d->hint_agree = 0; d->off_time = 0.0f; d->acc_P = 0.0f; }
-            } else {
-                /* o reconhecimento confirma a nota: ela continua soando,
-                   mesmo que os cruzamentos da onda estejam bagunçados */
-                d->hint_agree = 0;
-                d->off_time = 0.0f;
-                d->acc_P = 0.0f;
-            }
-        }
-    }
+        d->unconfirmed = 0.0f;
+        d->note_gone = 0.0f;
+        d->note_hz = hint_hz;
+        d->off_time = 0.0f;
+        d->acc_P = 0.0f;
+        if (d->center <= 0.0f || fabsf(12.0f * log2f(hint_hz / d->center)) > 0.3f) d->center = hint_hz;
+    } else if (!note_active) d->note_gone += (float)n;
     set_band(d);
 
     for (int i = 0; i < n; i++) {
@@ -169,6 +170,9 @@ void direct_process(Direct *d, const Patch *p, const float *in, float *out, int 
                 }
                 edge = 1;
                 d->edges++;
+                /* só sincroniza a fase com subidas que batem com o ciclo da
+                   nota (as subidas a mais dos harmônicos ficam de fora) */
+                d->edge_ok = d->note_hz > 0.0f && fabsf(12.0f * log2f(fP / d->note_hz)) < 1.0f;
             }
         } else if (d->state > 0 && y < -h) d->state = -1;
         d->y_prev = y;
@@ -183,19 +187,31 @@ void direct_process(Direct *d, const Patch *p, const float *in, float *out, int 
         int crossed = d->level > gate_on && d->prev_level <= gate_on && d->low < gate_off;
         d->prev_level = d->level;
         if (d->gate) d->unconfirmed += 1.0f;
-        if (!d->gate && d->level > gate_on && (picked || crossed)) {
+        /* hammer-on/slide sem palhetada: o detector de notas confirmou uma
+           nota diferente da que acabou de fechar */
+        int new_note = hint_hz > 0.0f && d->level > gate_off &&
+                       (d->closed_hz <= 0.0f || fabsf(12.0f * log2f(hint_hz / d->closed_hz)) > 0.6f);
+        if (!d->gate && (new_note || (d->level > gate_on && (picked || crossed)))) {
             d->gate = 1;
             d->unconfirmed = 0.0f;
+            if (!new_note) { d->note_hz = 0.0f; d->center = 0.0f; } /* não herda a nota que já acabou */
+            d->note_gone = 0.0f;
+            d->closed_hz = 0.0f;
             picked = 1;
-        } else if (d->gate && (d->level < gate_off || (d->center > 0.0f && d->env_y < 0.5f * gate_off) ||
-                               /* zumbido/ruído acima do gate: abriu mas nenhuma nota
-                                  foi reconhecida; não fica tocando o zumbido */
-                               d->unconfirmed > 0.15f * sr ||
-                               d->off_time > 0.030f * sr || (d->ref > gate_on && d->fast < 0.12f * d->ref))) {
+        } else if (d->gate &&
+                   (d->level < gate_off || (d->ref > gate_on && d->fast < 0.12f * d->ref) ||
+                    /* o detector de notas acabou a nota */
+                    (d->note_hz > 0.0f && d->note_gone > 0.03f * sr) ||
+                    /* sem nota confirmada, valem os testes da própria onda */
+                    (!locked(d) && ((d->center > 0.0f && d->env_y < 0.5f * gate_off) ||
+                                    /* zumbido/ruído acima do gate: abriu mas nenhuma
+                                       nota foi reconhecida; não fica tocando o zumbido */
+                                    d->unconfirmed > 0.15f * sr || d->off_time > 0.030f * sr)))) {
             /* a nota acabou quando o ciclo medido fica 30 ms longe dela */
             /* com a nota confirmada, conta só o som dentro da banda dela:
                cordas ressoando fora da banda não seguram o som */
             d->gate = 0;
+            d->closed_hz = d->note_hz > 0.0f ? d->note_hz : 0.0f;
             d->aenv.stage = d->fenv.stage = ENV_RELEASE;
         }
         if (picked && d->gate) {
@@ -257,9 +273,10 @@ void direct_process(Direct *d, const Patch *p, const float *in, float *out, int 
         }
 
         /* ---- osciladores medidos (OSC2 e oitavas): presos ao período ---- */
-        float f1  = sr / d->period * oct_mul * exp2f(dst[DST_PITCH] / 12.0f);
+        int lk = locked(d);
+        float f1  = (lk ? d->note_hz : sr / d->period) * oct_mul * exp2f(dst[DST_PITCH] / 12.0f);
         float dt1 = fminf(f1 / sr, 0.5f), dt2 = fminf(f1 * detune_mul / sr, 0.5f);
-        if (edge) {
+        if (edge && (!lk || d->edge_ok)) {
             /* a cada ciclo da corda, puxa a fase para o começo (com oitavas
                abaixo, a cada 2 ou 4 ciclos); só metade do erro: sem estalos */
             int every = oct >= 0 ? 1 : (1 << -oct);
@@ -275,9 +292,11 @@ void direct_process(Direct *d, const Patch *p, const float *in, float *out, int 
         d->ph1 += dt1; if (d->ph1 >= 1.0f) d->ph1 -= 1.0f;
         d->ph2 += dt2; if (d->ph2 >= 1.0f) d->ph2 -= 1.0f;
         /* liberados só com a nota confirmada (banda fechada em volta dela) */
-        float want_sync = d->center > 0.0f ? 1.0f : 0.0f;
+        float want_sync = lk ? 1.0f : 0.0f;
         d->synced += (want_sync - d->synced) * sync_coef;
-        float o1 = oct == 0 ? o1_shaped : o1_synced * d->synced;
+        /* começo da nota: a onda da corda (atraso zero); nota confirmada:
+           o oscilador preso a ela (altura sempre certa), em 4 ms */
+        float o1 = oct == 0 ? (1.0f - d->synced) * o1_shaped + d->synced * o1_synced : o1_synced * d->synced;
         float mix = clampf(p->osc_mix + dst[DST_OSC_MIX], 0.0f, 1.0f);
         float s = (1.0f - mix) * o1 + mix * o2 * d->synced;
         /* a onda moldada (triângulo integrado, quadrada com ciclo irregular)

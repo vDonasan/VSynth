@@ -31,6 +31,10 @@ typedef struct {
     float hp1, hp2, hp3, hp4, hp_coef;  /* ... e passa-altas (tira as cordas mais graves ressoando) */
     float center;             /* Hz em volta do qual a banda está (0 = banda aberta) */
     int   hint_agree;
+    float note_hz;            /* nota que o detector de notas diz estar soando (Hz, 0 = nenhuma) */
+    float note_gone;          /* amostras desde que o detector parou de ver nota */
+    float closed_hz;          /* nota que estava soando quando o som fechou */
+    int   edge_ok;            /* a última subida bateu com o ciclo da nota (pode sincronizar) */
     float unconfirmed;        /* amostras com o gate aberto sem o reconhecimento confirmar nota */
     float peak;               /* pico da nota atual (desde a palhetada) */
     float dcs_x, dcs_y;       /* tira o DC da mistura dos osciladores */
@@ -66,10 +70,14 @@ void direct_init(Direct *d, float sr);
 void direct_reset(Direct *d);
 /* in: guitarra crua; out: som do synth (somado em out). picks: contador de
    palhetadas do detector da guitarra (muda = palhetada nova). */
-/* hint_hz: leitura confiável do reconhecimento de notas neste instante
-   (0 = nenhuma). Serve só para fechar a banda em volta da nota certa; o som
-   segue os ciclos da corda. */
-void direct_process(Direct *d, const Patch *p, const float *in, float *out, int n, unsigned picks, float hint_hz);
+/* note_hz: frequência da nota que o detector de notas (o mesmo do modo
+   Notas) diz estar soando, já com bends (0 = nenhuma confirmada agora).
+   note_active: o detector tem uma nota ligada (mesmo esperando confirmar a
+   próxima). Logo depois da palhetada o som vem dos cruzamentos da corda
+   (atraso zero); quando a nota é confirmada, o OSC1 passa a ser um
+   oscilador preso a essa frequência, e os cruzamentos só acertam a fase. */
+void direct_process(Direct *d, const Patch *p, const float *in, float *out, int n, unsigned picks,
+                    float note_hz, int note_active);
 /* frequência que o modo direto está seguindo agora (0 = nenhuma) */
 float direct_hz(const Direct *d);
 

@@ -463,10 +463,14 @@ void engine_process(Engine *e, const float *in, int in_channels, float *out, int
         synth_render(&e->synth, e->mono, n);
         if (gtr && e->direct_on == 1 && done < 4096) {
             int m = done + n <= 4096 ? n : 4096 - done;
-            float hz = atomic_load_explicit(&e->guitar.st_hz, memory_order_relaxed);
-            float hint = hz > 0.0f && e->guitar.tracker.conf >= 0.9f ? hz : 0.0f;
+            /* a nota que o detector de notas confirmou (o mesmo do modo
+               Notas); logo depois da palhetada, até ele confirmar a nova,
+               nenhuma: o som vem dos cruzamentos da corda */
+            const NoteTracker *tk = &e->guitar.tracker;
+            int active = tk->current >= 0;
+            float hint = active && !tk->attack_pending && e->guitar.held_hz > 0.0f ? e->guitar.held_hz : 0.0f;
             direct_process(&e->direct, &e->synth.patch, e->gtr_in + done, e->mono, m,
-                           atomic_load_explicit(&e->guitar.pick_count, memory_order_relaxed), hint);
+                           atomic_load_explicit(&e->guitar.pick_count, memory_order_relaxed), hint, active);
         }
         if (recording && gtr) /* esquerda: o que entrou da guitarra, cru; direita: o synth */
             for (int i = 0; i < n && done + i < 4096; i++) {
