@@ -536,6 +536,10 @@ int engine_refresh_devices(Engine *e)
 {
     EngineAudio *a = e->audio;
     if (!a->ctx_ok) {
+#ifdef HAVE_ASIO
+        /* procura os drivers ASIO antes do miniaudio iniciar o COM */
+        if (!e->null_backend) (void)asio_driver_count();
+#endif
         ma_backend null_only[1] = {ma_backend_null};
         if (ma_context_init(e->null_backend ? null_only : NULL, e->null_backend ? 1 : 0, NULL, &a->ctx) != MA_SUCCESS) return -1;
         a->ctx_ok = 1;
