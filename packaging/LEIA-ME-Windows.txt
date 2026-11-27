@@ -13,5 +13,22 @@ depois em "Executar assim mesmo".
 Guitarra com interface de áudio: na engrenagem (Configurações de áudio),
 escolha a saída "ASIO: nome da sua interface" para o menor atraso.
 
+Plugin para o REAPER (e outras DAWs)
+------------------------------------
+A pasta Plugins tem o VirtualSynth.clap e o VirtualSynth.vst3.
+1. Copie o VirtualSynth.clap para C:\Program Files\Common Files\CLAP
+   e/ou o VirtualSynth.vst3 para C:\Program Files\Common Files\VST3
+   (crie a pasta se não existir).
+2. No REAPER: Options > Preferences > Plug-ins > CLAP (ou VST) > Re-scan.
+3. Numa trilha com a guitarra (entrada de áudio ligada, monitoramento
+   ligado), adicione o FX "Virtual Synth". A guitarra entra pelo canal
+   esquerdo; MIDI da trilha também toca o synth.
+4. Para gravar as notas da guitarra como MIDI: no parâmetro
+   "Saída MIDI > Enviar", escolha "Guitarra" e mande a saída MIDI do FX
+   para outra trilha (Routing).
+Os controles aparecem na tela genérica de parâmetros do REAPER e todos
+podem ser automatizados. Use "Calibrar gate" no app, ou ajuste
+"Guitarra > Gate" à mão.
+
 Código-fonte e ajuda: https://github.com/vDonasan/VSynth
 Licença: GPLv3 (arquivo LICENSE).

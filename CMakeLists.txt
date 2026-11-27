@@ -41,6 +41,8 @@ set(CORE_SOURCES
 # Núcleo de áudio (sem interface), usado pelo app e pelos testes
 add_library(synthcore STATIC ${CORE_SOURCES} src/miniaudio_impl.c)
 target_include_directories(synthcore PUBLIC src ${miniaudio_SOURCE_DIR})
+# dentro dos plugins, só a entrada do plugin fica visível para o host
+set_target_properties(synthcore PROPERTIES C_VISIBILITY_PRESET hidden)
 find_package(Threads REQUIRED)
 target_link_libraries(synthcore PUBLIC Threads::Threads)
 if(UNIX)
@@ -145,16 +147,19 @@ if(SYNTH_PLUGIN)
   add_library(vsynth_clap MODULE src/plugin_clap.c)
   target_include_directories(vsynth_clap PRIVATE ${clap_SOURCE_DIR}/include)
   target_link_libraries(vsynth_clap PRIVATE synthcore)
-  set_target_properties(vsynth_clap PROPERTIES OUTPUT_NAME "VirtualSynth" PREFIX "" SUFFIX ".clap"
-                        C_VISIBILITY_PRESET hidden)
+  set_target_properties(vsynth_clap PROPERTIES OUTPUT_NAME "VirtualSynth" C_VISIBILITY_PRESET hidden)
   if(APPLE)
-    set_target_properties(vsynth_clap PROPERTIES BUNDLE TRUE BUNDLE_EXTENSION clap
-      MACOSX_BUNDLE_GUI_IDENTIFIER com.vdonasan.virtualsynth MACOSX_BUNDLE_BUNDLE_NAME VirtualSynth)
+    # no macOS o .clap é um bundle: VirtualSynth.clap/Contents/MacOS/VirtualSynth
+    set_target_properties(vsynth_clap PROPERTIES BUNDLE TRUE BUNDLE_EXTENSION clap PREFIX ""
+      MACOSX_BUNDLE_GUI_IDENTIFIER com.vdonasan.virtualsynth MACOSX_BUNDLE_BUNDLE_NAME VirtualSynth
+      MACOSX_BUNDLE_BUNDLE_VERSION 1.0.7 MACOSX_BUNDLE_SHORT_VERSION_STRING 1.0.7)
+  else()
+    set_target_properties(vsynth_clap PROPERTIES PREFIX "" SUFFIX ".clap")
   endif()
   if(MINGW)
     target_link_options(vsynth_clap PRIVATE -static -static-libgcc)
   elseif(UNIX AND NOT APPLE)
-    target_link_options(vsynth_clap PRIVATE -Wl,--no-undefined -Wl,--version-script=${CMAKE_SOURCE_DIR}/cmake/clap.version)
+    target_link_options(vsynth_clap PRIVATE -Wl,--no-undefined)
   endif()
   if(NOT MSVC)
     target_compile_options(vsynth_clap PRIVATE -Wall -Wextra)
@@ -170,6 +175,31 @@ if(SYNTH_PLUGIN)
   endif()
   add_dependencies(test_clap_host vsynth_clap)
   add_test(NAME clap_host COMMAND test_clap_host $<TARGET_FILE:vsynth_clap>)
+
+  # VST3: o mesmo plugin embrulhado pelo clap-wrapper (free-audio), que
+  # baixa o SDK VST3 da Steinberg (MIT). VirtualSynth.vst3
+  option(SYNTH_VST3 "Compilar também o plugin VST3 (precisa de C++)" ON)
+  if(SYNTH_VST3)
+    enable_language(CXX)
+    set(CMAKE_CXX_STANDARD 17)
+    set(CLAP_SDK_ROOT ${clap_SOURCE_DIR})
+    set(CLAP_WRAPPER_DOWNLOAD_DEPENDENCIES TRUE CACHE BOOL "" FORCE)
+    set(CLAP_WRAPPER_DONT_ADD_TARGETS TRUE CACHE BOOL "" FORCE)
+    FetchContent_Declare(clapwrapper
+      GIT_REPOSITORY https://github.com/free-audio/clap-wrapper.git
+      GIT_TAG v0.12.1 GIT_SHALLOW TRUE)
+    FetchContent_MakeAvailable(clapwrapper)
+    add_library(vsynth_vst3 MODULE src/plugin_clap.c)
+    target_include_directories(vsynth_vst3 PRIVATE ${clap_SOURCE_DIR}/include)
+    target_link_libraries(vsynth_vst3 PRIVATE synthcore)
+    set_target_properties(vsynth_vst3 PROPERTIES C_VISIBILITY_PRESET hidden CXX_VISIBILITY_PRESET hidden PREFIX "")
+    target_add_vst3_wrapper(TARGET vsynth_vst3 OUTPUT_NAME "VirtualSynth"
+      SUPPORTS_ALL_NOTE_EXPRESSIONS FALSE
+      BUNDLE_IDENTIFIER com.vdonasan.virtualsynth.vst3 BUNDLE_VERSION 1.0.7)
+    if(MINGW)
+      target_link_options(vsynth_vst3 PRIVATE -static -static-libgcc -static-libstdc++)
+    endif()
+  endif()
 endif()
 
 # Testes (não precisam de placa de som nem de janela)

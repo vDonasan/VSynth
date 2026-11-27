@@ -12,5 +12,19 @@ Virtual Synth para macOS
 Presets e configurações ficam em
 ~/Library/Application Support/Virtual Synth
 
+Plugin para o REAPER (e outras DAWs)
+------------------------------------
+A pasta Plugins tem o VirtualSynth.clap e o VirtualSynth.vst3.
+1. Copie o VirtualSynth.clap para ~/Library/Audio/Plug-Ins/CLAP
+   e/ou o VirtualSynth.vst3 para ~/Library/Audio/Plug-Ins/VST3.
+   Se o macOS bloquear, rode no Terminal:
+     xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/CLAP/VirtualSynth.clap
+2. No REAPER: Settings > Plug-ins > CLAP (ou VST) > Re-scan.
+3. Numa trilha com a guitarra (entrada ligada, monitoramento ligado),
+   adicione o FX "Virtual Synth". A guitarra entra pelo canal esquerdo;
+   MIDI da trilha também toca o synth.
+4. Para gravar as notas da guitarra como MIDI: "Saída MIDI > Enviar" =
+   "Guitarra" e mande a saída MIDI do FX para outra trilha.
+
 Código-fonte e ajuda: https://github.com/vDonasan/VSynth
 Licença: GPLv3 (arquivo LICENSE).

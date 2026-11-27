@@ -43,6 +43,13 @@ typedef struct {
     Arp    arp;
     Looper looper;
     Guitar guitar;
+    /* a análise da guitarra foi feita para ~48 kHz: em projetos de 88,2 kHz
+       ou mais (plugin) ela recebe uma cópia reduzida (filtro + 1 de cada D) */
+    int    gtr_dec;
+    int    gtr_dec_phase;
+    float  gtr_dec_z[2][2];
+    float  gtr_dec_b[2][5];
+    float  gtr_dec_buf[4096];
 
     EventQueue q_ui;    /* teclado do computador e piano na tela */
     EventQueue q_midi;

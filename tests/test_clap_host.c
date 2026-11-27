@@ -69,12 +69,13 @@ static int64_t ms_read(const clap_istream_t *s, void *b, uint64_t n)
 }
 
 /* ---------- helpers ---------- */
+static double SRATE = 48000.0;
 static const clap_plugin_t *make(const clap_plugin_factory_t *f)
 {
     const clap_plugin_descriptor_t *d = f->get_plugin_descriptor(f, 0);
     const clap_plugin_t *p = f->create_plugin(f, &HOST, d->id);
     if (!p || !p->init(p)) return NULL;
-    if (!p->activate(p, 48000.0, 32, 512)) return NULL;
+    if (!p->activate(p, SRATE, 32, 512)) return NULL;
     p->start_processing(p);
     return p;
 }
@@ -182,34 +183,51 @@ int main(int argc, char **argv)
     printf("  texto: 1200 -> \"%s\"\n", txt);
     CHECK(strlen(txt) > 0, "value_to_text vazio");
 
-    /* 5. guitarra: nota reconhecida vira som e MIDI de saída */
-    const clap_plugin_t *g = make(f);
-    clap_id msrc = find_param(g, "Enviar", "Saída MIDI");
-    CHECK(msrc != CLAP_INVALID_ID, "não achou Saída MIDI > Enviar");
-    clap_event_param_value_t m1 = pv(msrc, 1.0);
-    il_init(&il); il.ev[il.n++] = &m1.header;
-    OutList go; ol_init(&go);
-    long n = 48000 * 2, pos = 0;
-    float *gtr = calloc(n + 4096, sizeof(float));
-    for (long i = 0; i < n; i++) {
-        double t = (i - 4800) / 48000.0;
-        if (t < 0) continue;
-        double f0 = 110.0, env = exp(-2.0 * t), v = 0;
-        for (int k = 1; k <= 8; k++) v += sin(2 * M_PI * f0 * k * t) / k * exp(-0.4 * k * t);
-        gtr[i] = (float)(0.2 * env * v);
-        if (i - 4800 < 200) gtr[i] += (float)(0.1 * ((rand() / (double)RAND_MAX) * 2 - 1));
+    /* 5. guitarra: nota reconhecida vira som e MIDI de saída, em várias taxas */
+    const double rates[4] = {48000.0, 44100.0, 96000.0, 192000.0};
+    for (int r = 0; r < 4; r++) {
+        SRATE = rates[r];
+        const clap_plugin_t *g = make(f);
+        CHECK(g != NULL, "não ativou nessa taxa");
+        if (!g) continue;
+        clap_id msrc = find_param(g, "Enviar", "Saída MIDI");
+        CHECK(msrc != CLAP_INVALID_ID, "não achou Saída MIDI > Enviar");
+        clap_event_param_value_t m1 = pv(msrc, 1.0);
+        il_init(&il); il.ev[il.n++] = &m1.header;
+        OutList go; ol_init(&go);
+        long n = (long)(SRATE * 2), pos = 0;
+        float *gtr = calloc(n + 4096, sizeof(float));
+        srand(1);
+        for (long i = 0; i < n; i++) {
+            double t = (i - SRATE * 0.1) / SRATE;
+            if (t < 0) continue;
+            double f0 = 110.0, env = exp(-2.0 * t), v = 0;
+            for (int k = 1; k <= 8; k++) v += sin(2 * M_PI * f0 * k * t) / k * exp(-0.4 * k * t);
+            gtr[i] = (float)(0.2 * env * v);
+            if (t < 0.004) gtr[i] += (float)(0.1 * ((rand() / (double)RAND_MAX) * 2 - 1));
+        }
+        double grms = run(g, (int)(n / 512), &il, &go, gtr, &pos);
+        int others = 0;
+        char ol_txt[128] = "";
+        for (int k = 0; k < 128; k++) if (k != 45 && go.note_on[k]) {
+            others += go.note_on[k];
+            char t[16]; snprintf(t, sizeof t, " %d", k);
+            strncat(ol_txt, t, sizeof ol_txt - strlen(ol_txt) - 1);
+        }
+        printf("  guitarra a %6.0f Hz (Lá 110 Hz): saída %.1f dB, MIDI de saída: nota 45 x%d, outras:%s\n",
+               SRATE, 20 * log10(grms + 1e-12), go.note_on[45], others ? ol_txt : " nenhuma");
+        CHECK(grms > 0.003, "a guitarra não fez som");
+        /* aceita só a vizinha corrigida logo no começo (palhetada chegando
+           de meio tom abaixo): nada além disso */
+        int bad = others - go.note_on[44] - go.note_on[46];
+        CHECK(go.note_on[45] == 1 && bad == 0 && go.note_on[44] + go.note_on[46] <= 1, "a nota da guitarra não saiu certa como MIDI");
+        g->destroy(g);
+        free(gtr);
     }
-    double grms = run(g, (int)(n / 512), &il, &go, gtr, &pos);
-    printf("  guitarra (Lá 110 Hz): saída %.1f dB, MIDI de saída: nota 45 x%d, note-offs %d, bends %d\n",
-           20 * log10(grms + 1e-12), go.note_on[45], go.note_off, go.bends);
-    CHECK(grms > 0.003, "a guitarra não fez som");
-    CHECK(go.note_on[45] >= 1, "a nota da guitarra não saiu como MIDI");
 
     a->destroy(a);
     b->destroy(b);
-    g->destroy(g);
     entry->deinit();
-    free(gtr);
     printf(failures ? "\n%d falha(s)\n" : "\nPlugin: todos os testes passaram.\n", failures);
     return failures ? 1 : 0;
 }

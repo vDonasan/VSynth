@@ -68,7 +68,22 @@ int engine_init(Engine *e, float sr)
     e->harm_audio[0] = e->harm_audio[1] = -1;
     if (fx_init(&e->fx, sr) < 0) return -1;
     if (looper_init(&e->looper, sr, 60.0f) < 0) return -1;
-    if (guitar_init(&e->guitar, sr, &e->q_gtr) < 0) return -1;
+    /* análise da guitarra perto de 48 kHz */
+    e->gtr_dec = sr > 66000.0f ? (int)lroundf(sr / 48000.0f) : 1;
+    {
+        /* passa-baixa Butterworth de 4ª ordem (2 biquads) em 0,45 da nova taxa */
+        float fc = 0.45f * (sr / e->gtr_dec) / 2.0f, w = 2.0f * 3.14159265f * fc / sr, cw = cosf(w), sw = sinf(w);
+        const float qs[2] = {0.5411961f, 1.3065630f};
+        for (int k = 0; k < 2; k++) {
+            float al = sw / (2.0f * qs[k]), a0 = 1.0f + al;
+            e->gtr_dec_b[k][0] = (1.0f - cw) / 2.0f / a0;
+            e->gtr_dec_b[k][1] = (1.0f - cw) / a0;
+            e->gtr_dec_b[k][2] = (1.0f - cw) / 2.0f / a0;
+            e->gtr_dec_b[k][3] = -2.0f * cw / a0;
+            e->gtr_dec_b[k][4] = (1.0f - al) / a0;
+        }
+    }
+    if (guitar_init(&e->guitar, sr / e->gtr_dec, &e->q_gtr) < 0) return -1;
     direct_init(&e->direct, sr);
     e->direct_on = -1;
     if (fring_init(&e->rec_ring, REC_RING_SIZE) < 0) return -1;
@@ -377,6 +392,26 @@ static void route(Engine *e, Event ev, int arp_on)
     if (root) deliver(e, ev, arp_on);
 }
 
+/* entrega a entrada à análise da guitarra (reduzida em projetos de taxa alta) */
+static int gtr_feed(Engine *e, const float *in, int n)
+{
+    if (e->gtr_dec <= 1) return guitar_feed(&e->guitar, in, n);
+    int k = 0;
+    for (int i = 0; i < n; i++) {
+        float x = in[i];
+        for (int s = 0; s < 2; s++) {
+            const float *b = e->gtr_dec_b[s];
+            float *z = e->gtr_dec_z[s];
+            float y = b[0] * x + z[0];
+            z[0] = b[1] * x - b[3] * y + z[1];
+            z[1] = b[2] * x - b[4] * y;
+            x = y;
+        }
+        if (++e->gtr_dec_phase >= e->gtr_dec) { e->gtr_dec_phase = 0; e->gtr_dec_buf[k++] = x; }
+    }
+    return k ? guitar_feed(&e->guitar, e->gtr_dec_buf, k) : 0;
+}
+
 static void metronome(Engine *e, float *l, float *r, int n, float bpm, float master)
 {
     double spb = 60.0 / bpm * e->sr;
@@ -472,7 +507,7 @@ void engine_process(Engine *e, const float *in, int in_channels, float *out, int
            reconhecida, ela já começa neste mesmo pedaço da saída */
         if (gtr && done < 4096) {
             int m = done + n <= 4096 ? n : 4096 - done;
-            if (guitar_feed(&e->guitar, e->gtr_in + done, m))
+            if (gtr_feed(e, e->gtr_in + done, m))
                 while (evq_pop(&e->q_gtr, &ev)) route(e, ev, arp_on);
             /* palhetada que não virou nota (ruído, corda abafada): solta */
             if (e->gtr_pending && (e->gtr_pending_age += n) > (int)(0.032f * e->sr)) {

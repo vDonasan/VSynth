@@ -40,12 +40,24 @@ jobs:
           cmake -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build -j
       - name: Testes
-        run: ./build/test_dsp && ./build/test_midi_out
+        run: ./build/test_dsp && ./build/test_midi_out && ./build/test_clap_host build/VirtualSynth.clap
+      - name: Validador oficial do CLAP (free-audio/clap-validator)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p cv && cd cv
+          gh release download -R free-audio/clap-validator --pattern '*inux*' --pattern '*buntu*' || exit 0
+          for f in *.tar.gz *.zip; do [ -f "$f" ] && (tar xzf "$f" 2>/dev/null || unzip -o -q "$f"); done
+          V=$(find . -type f -name 'clap-validator' | head -1); chmod +x "$V"
+          "$V" validate ../build/VirtualSynth.clap
       - name: Empacotar
         run: |
-          mkdir -p VirtualSynth-Linux
+          mkdir -p VirtualSynth-Linux/Plugins
           cp build/synth VirtualSynth-Linux/VirtualSynth
           strip VirtualSynth-Linux/VirtualSynth
+          cp build/VirtualSynth.clap VirtualSynth-Linux/Plugins/
+          cp -r "$(find build -maxdepth 3 -type d -name VirtualSynth.vst3 | head -1)" VirtualSynth-Linux/Plugins/
           cp LICENSE VirtualSynth-Linux/
           cp packaging/LEIA-ME-Linux.txt VirtualSynth-Linux/LEIA-ME.txt
           tar czf VirtualSynth-Linux.tar.gz VirtualSynth-Linux
@@ -70,13 +82,17 @@ jobs:
           cmake --build build-win -j
       - name: Conferir que não depende de DLLs fora do Windows
         run: |
-          x86_64-w64-mingw32-objdump -p build-win/synth.exe | grep "DLL Name" | tee dlls.txt
+          for f in build-win/synth.exe build-win/VirtualSynth.clap build-win/VirtualSynth.vst3; do
+            x86_64-w64-mingw32-objdump -p "$f" | grep "DLL Name" | tee -a dlls.txt
+          done
           ! grep -viE "kernel32|user32|gdi32|shell32|advapi32|ole32|oleaut32|winmm|msvcrt|ws2_32|opengl32|comdlg32|setupapi|uuid|imm32|version" dlls.txt
       - name: Empacotar
         run: |
-          mkdir -p VirtualSynth-Windows
+          mkdir -p VirtualSynth-Windows/Plugins
           cp build-win/synth.exe VirtualSynth-Windows/VirtualSynth.exe
           x86_64-w64-mingw32-strip VirtualSynth-Windows/VirtualSynth.exe
+          cp build-win/VirtualSynth.clap build-win/VirtualSynth.vst3 VirtualSynth-Windows/Plugins/
+          x86_64-w64-mingw32-strip VirtualSynth-Windows/Plugins/*
           cp LICENSE VirtualSynth-Windows/LICENSE.txt
           cp packaging/LEIA-ME-Windows.txt VirtualSynth-Windows/LEIA-ME.txt
           zip -r VirtualSynth-Windows.zip VirtualSynth-Windows
@@ -101,9 +117,9 @@ jobs:
           install: mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake make git
       - name: Compilar e testar
         run: |
-          cmake -B build -G "MSYS Makefiles" -DCMAKE_BUILD_TYPE=Release
-          cmake --build build -j --target test_dsp test_midi_out
-          ./build/test_dsp.exe && ./build/test_midi_out.exe
+          cmake -B build -G "MSYS Makefiles" -DCMAKE_BUILD_TYPE=Release -DSYNTH_VST3=OFF
+          cmake --build build -j --target test_dsp test_midi_out test_clap_host
+          ./build/test_dsp.exe && ./build/test_midi_out.exe && ./build/test_clap_host.exe build/VirtualSynth.clap
 
   macos:
     timeout-minutes: 30
@@ -116,7 +132,7 @@ jobs:
                 -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
           cmake --build build -j
       - name: Testes
-        run: ./build/test_dsp && ./build/test_midi_out
+        run: ./build/test_dsp && ./build/test_midi_out && ./build/test_clap_host build/VirtualSynth.clap/Contents/MacOS/VirtualSynth
       - name: Montar o app
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
@@ -126,8 +142,11 @@ jobs:
           cp build/synth "$APP/Contents/MacOS/VirtualSynth"
           sed "s/@VERSION@/$VERSION/g" packaging/Info.plist > "$APP/Contents/Info.plist"
           codesign --force --deep --sign - "$APP" # assinatura local: o macOS exige alguma no Apple Silicon
-          mkdir -p VirtualSynth-macOS
+          mkdir -p VirtualSynth-macOS/Plugins
           mv "$APP" VirtualSynth-macOS/
+          cp -R build/VirtualSynth.clap VirtualSynth-macOS/Plugins/
+          cp -R "$(find build -maxdepth 3 -type d -name VirtualSynth.vst3 -prune | head -1)" VirtualSynth-macOS/Plugins/
+          codesign --force --deep --sign - VirtualSynth-macOS/Plugins/VirtualSynth.clap VirtualSynth-macOS/Plugins/VirtualSynth.vst3
           cp LICENSE VirtualSynth-macOS/
           cp packaging/LEIA-ME-macOS.txt VirtualSynth-macOS/LEIA-ME.txt
           ditto -c -k --keepParent VirtualSynth-macOS VirtualSynth-macOS.zip
@@ -163,6 +182,10 @@ jobs:
             Descompacte e abra o programa; cada pacote tem um `LEIA-ME.txt`
             com os detalhes (avisos de segurança do Windows e do macOS na
             primeira vez, permissão de microfone etc.).
+
+            Cada pacote também traz a pasta `Plugins` com o **VirtualSynth.clap**
+            e o **VirtualSynth.vst3** para usar dentro do REAPER e de outras DAWs
+            (veja o `LEIA-ME.txt`).
           files: |
             VirtualSynth-Windows.zip
             VirtualSynth-macOS.zip
