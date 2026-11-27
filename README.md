@@ -68,7 +68,7 @@ Presets, settings and recordings are kept next to the program (on macOS, in
 |---|---|
 | **Teclado** (Keyboard) | Play the two rows of letter keys (the on-screen piano shows which). ←/→ change the octave, **Space** is the sustain pedal. The computer keyboard and the on-screen piano work in any mode. |
 | **MIDI** | Pick the device from the list. If you plugged it in with the app open, click **Atualizar** (Refresh). Pitch bend, mod wheel and sustain pedal work out of the box. |
-| **Guitarra** (Guitar) | Pick the audio input (ideally an audio interface) and the channel. Click **Calibrar gate** (Calibrate gate) and keep the strings muted for 3 seconds: the gate (orange line) is set just above the noise. You can also set the **Gate** knob by hand. |
+| **Guitarra** (Guitar) | Pick the audio input (ideally an audio interface) and the channel. Click **Calibrar gate** (Calibrate gate) and leave the guitar still for 2 seconds: the app measures your interface's noise inside the audio stream and sets the gate (orange line) 10 dB above it. You can also set the **Gate** knob by hand. |
 
 Guitar panel:
 - **Mistura** (Mix): blends the clean guitar with the synth. All the way left
@@ -121,6 +121,11 @@ To cope with a real guitar, the detector:
   slightly sharp and settles);
 - changes note without a new pick (hammer-on, slide) only after 20 ms of
   consistent readings;
+- treats a one-semitone change in the first 80 ms after a pick as the **same
+  note being corrected** (a string arriving from a semitone below/above): it
+  switches as soon as the reading is nearer the neighbour, and the synth
+  glides there in 8 ms without retriggering. In the tests, time on the wrong
+  note dropped from 25 ms to 3 ms;
 - **starts** a note only after an attack (a pick, or sound coming out of
   silence): steady hum and noise never become notes, even with a low gate;
 - **subtracts the strings that are still ringing** (harmonic cancellation):
@@ -166,10 +171,17 @@ crossings). So:
 
 A band-pass filter around the note removes harmonics and lower ringing
 strings; it opens on each pick and closes around the note once it is
-confirmed. OSC2 (with its detune) and the octave shift need the note's
-period, so they come in once the note is confirmed (~12–19 ms). The sound
-only opens on a pick and closes when you mute the string, so ringing strings
-and hum don't play by themselves. Filter, envelopes (triggered by the pick),
+confirmed. Right after the pick the sound comes from the string's own
+crossings (no delay). As soon as the note detector (the same one Notes mode
+uses) confirms the note, OSC1 crossfades in 4 ms to an oscillator locked to
+that frequency, bends included, and the string's crossings only keep its
+phase aligned; OSC2 and the octave shift lock to it too. The gate also
+follows the detector: while it holds a note the sound stays open, it closes
+when you mute the string or the note ends, and a hammer-on or slide without a
+pick reopens it. Steady hum above the gate never plays: if no note is
+confirmed within 150 ms, the sound closes. On a real recording, compared with
+what Notes mode heard, wrong pitch went from 10.5% to 1% and silence while a
+note was sounding from 18% to 9%. Filter, envelopes (triggered by the pick),
 LFO and the modulation matrix work as on the synth. MIDI output, harmonizer
 and arpeggiator need Notes mode.
 
