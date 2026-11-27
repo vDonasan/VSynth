@@ -1180,6 +1180,69 @@ static void test_scoop(void)
     CHECK(worst <= 25.0f, "nota errada por tempo demais no começo");
 }
 
+/* Ponte entre dois aparelhos com relógios diferentes: sem faltar nem
+   sobrar amostra depois de acomodar, e o seno continua limpo */
+#include "../src/drift.h"
+static void test_drift(void)
+{
+    printf("Teste 8b: entrada e saída em aparelhos diferentes (relógios diferentes)\n");
+    const double ppms[5] = {0.0, 300.0, -300.0, 1000.0, -1000.0};
+    for (int k = 0; k < 5; k++) {
+        Drift d;
+        drift_init(&d, 2, 480 + 128 + 64);
+        double sr = 48000.0, cap_sr = sr * (1.0 + ppms[k] * 1e-6);
+        double t_cap = 0, t_play = 0, ph = 0;
+        int secs = 60, nout = (int)(secs * sr), got = 0;
+        float *y = malloc(sizeof(float) * nout), in[480 * 2], out[128 * 2];
+        int minf = 1 << 30, maxf = 0;
+        unsigned under_after = 0, over_after = 0;
+        while (got + 128 <= nout) {
+            if (t_cap <= t_play) {
+                for (int i = 0; i < 480; i++) { float v = 0.5f * (float)sin(ph); in[2 * i] = v; in[2 * i + 1] = -v; ph += 6.283185307179586 * 997.0 / cap_sr; }
+                drift_push(&d, in, 480);
+                t_cap += 480.0 / cap_sr;
+            } else {
+                unsigned u0 = d.underruns, o0 = d.overruns;
+                drift_pull(&d, out, 128);
+                for (int i = 0; i < 128; i++) y[got + i] = out[2 * i];
+                got += 128;
+                t_play += 128.0 / sr;
+                if (t_play > 30.0) {
+                    under_after += d.underruns - u0;
+                    over_after += d.overruns - o0;
+                    int f = drift_fill(&d);
+                    if (f < minf) minf = f;
+                    if (f > maxf) maxf = f;
+                }
+            }
+        }
+        /* pureza do seno no último segundo: DFT com janela Blackman-Harris;
+           energia fora de ±20 Hz do seno = estalos/distorção */
+        int n = 16384, a0 = nout - n - 256;
+        double sig = 0, res = 0;
+        for (int b = 1; b < n / 2; b += 1) {
+            double f = (double)b * sr / n;
+            if (f > 4000.0 && b % 4) continue; /* agudos: amostra 1 a cada 4 casas */
+            double re = 0, im = 0;
+            for (int i = 0; i < n; i++) {
+                double x = 2 * 3.141592653589793 * i / (n - 1);
+                double w = 0.35875 - 0.48829 * cos(x) + 0.14128 * cos(2 * x) - 0.01168 * cos(3 * x);
+                double ang = 2 * 3.141592653589793 * b * i / n;
+                re += w * y[a0 + i] * cos(ang); im -= w * y[a0 + i] * sin(ang);
+            }
+            double p2 = (re * re + im * im) * (f > 4000.0 ? 4 : 1);
+            if (fabs(f - 997.0) < 20.0) sig += p2; else res += p2;
+        }
+        double snr = 10 * log10(sig / (res + 1e-30));
+        int pass = under_after == 0 && over_after == 0 && snr > 60.0;
+        printf("  relógio da entrada %+6.0f ppm: falhas depois de 30 s %u/%u, fila %d..%d quadros (alvo %d), passo %.6f, seno limpo %.0f dB %s\n",
+               ppms[k], under_after, over_after, minf, maxf, d.target, d.ratio, snr, pass ? "ok" : "ERRO");
+        CHECK(pass, "ponte entre aparelhos: falhas ou som sujo");
+        free(y);
+        drift_free(&d);
+    }
+}
+
 int main(void)
 {
     params_init();
@@ -1192,6 +1255,7 @@ int main(void)
     test_real_guitar();
     test_direct_mode();
     test_gate_calibration();
+    test_drift();
     test_fast_attack();
     test_fast_attack_noise();
     test_repick();

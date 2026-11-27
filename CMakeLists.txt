@@ -31,7 +31,8 @@ FetchContent_Populate(miniaudio)  # só o cabeçalho
 
 set(CORE_SOURCES
   src/params.c src/synth.c src/fx.c src/arp.c src/looper.c
-  src/pitch.c src/guitar.c src/gtr_direct.c src/engine.c src/recorder.c)
+  src/pitch.c src/guitar.c src/gtr_direct.c
+    src/drift.c src/engine.c src/recorder.c)
 
 # Núcleo de áudio (sem interface), usado pelo app e pelos testes
 add_library(synthcore STATIC ${CORE_SOURCES} src/miniaudio_impl.c)

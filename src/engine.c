@@ -7,8 +7,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #include "miniaudio.h"
+#include "drift.h"
 #include "params.h"
 
 /* ------------------------------------------------------------------ */
@@ -38,6 +40,13 @@ struct EngineAudio {
     int          ctx_ok;
     ma_device    dev;
     ma_device_id play_id[MAX_AUDIO_DEVS], cap_id[MAX_AUDIO_DEVS];
+    /* entrada e saída em aparelhos diferentes: duas conexões e uma ponte
+       que absorve a diferença entre os relógios */
+    int          split;
+    ma_device    cap_dev;
+    Drift        drift;
+    float       *bridge_in;   /* entrada já acertada ao relógio da saída */
+    int          bridge_cap;  /* quadros que cabem em bridge_in */
 };
 
 #define TWO_PI_F 6.28318530717959f
@@ -536,6 +545,54 @@ static void data_callback(ma_device *d, void *out, const void *in, ma_uint32 fra
     engine_process(e, in, (int)d->capture.channels, out, (int)frames);
 }
 
+/* aparelhos separados: a entrada só enche a ponte... */
+static void capture_callback(ma_device *d, void *out, const void *in, ma_uint32 frames)
+{
+    (void)out;
+    Engine *e = d->pUserData;
+    drift_push(&e->audio->drift, in, (int)frames);
+}
+
+/* ...e a saída puxa dela no próprio relógio e roda o motor */
+static void split_playback_callback(ma_device *d, void *out, const void *in, ma_uint32 frames)
+{
+    (void)in;
+    Engine *e = d->pUserData;
+    EngineAudio *a = e->audio;
+    int ch = a->drift.ch, done = 0;
+    float *o = out;
+    while (done < (int)frames) {
+        int m = (int)frames - done;
+        if (m > a->bridge_cap) m = a->bridge_cap;
+        drift_pull(&a->drift, a->bridge_in, m);
+        engine_process(e, a->bridge_in, ch, o + (size_t)done * 2, m);
+        done += m;
+    }
+}
+
+/* Entrada e saída são a mesma interface? No Windows cada lado tem um nome
+   ("Alto-falantes (USB Audio CODEC)" e "Microfone (USB Audio CODEC)"): vale
+   o que está no último parêntese. */
+static int same_interface(const char *a, const char *b)
+{
+    if (!a || !b || !a[0] || !b[0]) return 0;
+    if (strcmp(a, b) == 0) return 1;
+    const char *pa = strrchr(a, '('), *pb = strrchr(b, '(');
+    if (!pa || !pb) return 0;
+    size_t la = strcspn(pa, ")"), lb = strcspn(pb, ")");
+    if (la != lb || la < 3) return 0;
+    for (size_t i = 0; i < la; i++)
+        if (tolower((unsigned char)pa[i]) != tolower((unsigned char)pb[i])) return 0;
+    return 1;
+}
+
+static const char *dev_name_or_default(const AudioDevice *list, int n, int idx)
+{
+    if (idx >= 0 && idx < n) return list[idx].name;
+    for (int i = 0; i < n; i++) if (list[i].is_default) return list[i].name;
+    return "";
+}
+
 int engine_refresh_devices(Engine *e)
 {
     EngineAudio *a = e->audio;
@@ -579,6 +636,72 @@ int engine_refresh_devices(Engine *e)
     return 0;
 }
 
+/* Entrada e saída em aparelhos diferentes (ex.: interface USB na entrada e
+   fone na placa do PC). Uma conexão duplex só funciona bem com um relógio
+   só: com dois, falta ou sobra amostra de tempos em tempos (estalos). */
+static int open_split(Engine *e, int play, int cap, int cap_channel)
+{
+    EngineAudio *a = e->audio;
+    ma_uint32 period = e->period_frames > 0 ? (ma_uint32)e->period_frames : FRAMES_PER_BUFFER;
+    ma_share_mode sm = e->exclusive ? ma_share_mode_exclusive : ma_share_mode_shared;
+    e->exclusive_failed = 0;
+
+    ma_device_config cc = ma_device_config_init(ma_device_type_capture);
+    cc.sampleRate         = (ma_uint32)e->sr;
+    cc.periodSizeInFrames = period;
+    cc.performanceProfile = ma_performance_profile_low_latency;
+    cc.capture.format     = ma_format_f32;
+    cc.capture.channels   = 0;
+    cc.capture.pDeviceID  = (cap >= 0 && cap < e->ncap) ? &a->cap_id[cap] : NULL;
+    cc.capture.shareMode  = sm;
+    cc.dataCallback       = capture_callback;
+    cc.pUserData          = e;
+    if (ma_device_init(&a->ctx, &cc, &a->cap_dev) != MA_SUCCESS) {
+        if (!e->exclusive) return -1;
+        cc.capture.shareMode = ma_share_mode_shared;
+        if (ma_device_init(&a->ctx, &cc, &a->cap_dev) != MA_SUCCESS) return -1;
+        e->exclusive_failed = 1;
+    }
+
+    ma_device_config pc = ma_device_config_init(ma_device_type_playback);
+    pc.sampleRate         = (ma_uint32)e->sr;
+    pc.periodSizeInFrames = period;
+    pc.performanceProfile = ma_performance_profile_low_latency;
+    pc.playback.format    = ma_format_f32;
+    pc.playback.channels  = 2;
+    pc.playback.pDeviceID = (play >= 0 && play < e->nplay) ? &a->play_id[play] : NULL;
+    pc.playback.shareMode = sm;
+    pc.dataCallback       = split_playback_callback;
+    pc.pUserData          = e;
+    if (ma_device_init(&a->ctx, &pc, &a->dev) != MA_SUCCESS) {
+        pc.playback.shareMode = ma_share_mode_shared;
+        if (ma_device_init(&a->ctx, &pc, &a->dev) != MA_SUCCESS) { ma_device_uninit(&a->cap_dev); return -1; }
+        if (e->exclusive) e->exclusive_failed = 1;
+    }
+
+    /* a ponte guarda um bloco de cada lado e uma folga */
+    int ch = (int)a->cap_dev.capture.channels;
+    int cap_period  = (int)a->cap_dev.capture.internalPeriodSizeInFrames;
+    int play_period = (int)a->dev.playback.internalPeriodSizeInFrames;
+    int target = cap_period + play_period + 64;
+    if (drift_init(&a->drift, ch, target) < 0) { ma_device_uninit(&a->dev); ma_device_uninit(&a->cap_dev); return -1; }
+    a->bridge_cap = 1024;
+    a->bridge_in  = calloc((size_t)a->bridge_cap * a->drift.ch, sizeof(float));
+    if (!a->bridge_in) { drift_free(&a->drift); ma_device_uninit(&a->dev); ma_device_uninit(&a->cap_dev); return -1; }
+    a->split = 1;
+
+    e->dev_ok         = 1;
+    e->dev_rate       = a->dev.playback.internalSampleRate;
+    e->dev_latency_ms = e->dev_rate ? 1000.0f * play_period / e->dev_rate : 0;
+    e->bridge_ms      = 1000.0f * target / e->sr;
+    atomic_store(&e->cap_channel, cap_channel);
+    snprintf(e->dev_name, sizeof e->dev_name, "%s", a->dev.playback.name);
+    snprintf(e->cap_name, sizeof e->cap_name, "%s", a->cap_dev.capture.name);
+    guitar_start(&e->guitar);
+    if (ma_device_start(&a->cap_dev) != MA_SUCCESS || ma_device_start(&a->dev) != MA_SUCCESS) { engine_close(e); return -1; }
+    return 0;
+}
+
 int engine_open(Engine *e, int play, int cap, int cap_channel)
 {
     EngineAudio *a = e->audio;
@@ -606,6 +729,13 @@ int engine_open(Engine *e, int play, int cap, int cap_channel)
         return 0;
     }
 #endif
+
+    const char *pname = dev_name_or_default(e->play, e->nplay, play);
+    const char *cname = cap == -2 ? "" : dev_name_or_default(e->cap, e->ncap, cap);
+    if (cap != -2 && !e->force_duplex && !same_interface(pname, cname))
+        return open_split(e, play, cap, cap_channel);
+    a->split = 0;
+    e->bridge_ms = 0.0f;
 
     ma_device_config cfg = ma_device_config_init(cap == -2 ? ma_device_type_playback : ma_device_type_duplex);
     cfg.sampleRate         = (ma_uint32)e->sr;
@@ -653,7 +783,15 @@ void engine_close(Engine *e)
     }
 #endif
     if (e->dev_ok) {
-        ma_device_uninit(&e->audio->dev); /* para o callback antes de mexer no resto */
+        EngineAudio *a = e->audio;
+        ma_device_uninit(&a->dev); /* para o callback antes de mexer no resto */
+        if (a->split) {
+            ma_device_uninit(&a->cap_dev);
+            drift_free(&a->drift);
+            free(a->bridge_in);
+            a->bridge_in = NULL;
+            a->split = 0;
+        }
         e->dev_ok = 0;
     }
     guitar_stop(&e->guitar);
@@ -664,5 +802,6 @@ int engine_capture_channels(Engine *e)
 #ifdef HAVE_ASIO
     if (e->asio_open) return asio_input_channels();
 #endif
+    if (e->dev_ok && e->audio->split) return (int)e->audio->drift.ch;
     return (e->dev_ok && e->audio->dev.type == ma_device_type_duplex) ? (int)e->audio->dev.capture.channels : 0;
 }

@@ -1838,7 +1838,10 @@ static void draw_audio_dialog(Gui *g)
     ui_tooltip((Rectangle){x + w - 38, r.y + 70, 38, 34}, "Procura de novo as saídas de áudio e reabre o som.");
     if (ui_button((Rectangle){x + w - 38, r.y + 70, 38, 34}, "@refresh", UI_BTN_NORMAL)) { build_device_lists(g); apply_audio(g); }
     char t[160];
-    if (g->e->dev_ok) snprintf(t, sizeof t, "Funcionando: %u Hz · buffer de %.1f ms%s", g->e->dev_rate, g->e->dev_latency_ms,
+    if (g->e->dev_ok && g->e->bridge_ms > 0.0f)
+        snprintf(t, sizeof t, "Funcionando: %u Hz · buffer de %.1f ms · entrada e saída em aparelhos diferentes (+%.0f ms de ponte)",
+                 g->e->dev_rate, g->e->dev_latency_ms, g->e->bridge_ms);
+    else if (g->e->dev_ok) snprintf(t, sizeof t, "Funcionando: %u Hz · buffer de %.1f ms%s", g->e->dev_rate, g->e->dev_latency_ms,
                                g->e->asio_open ? " · ASIO" : (g->e->exclusive && !g->e->exclusive_failed ? " · exclusivo" : ""));
     else snprintf(t, sizeof t, "Áudio desligado");
     ui_led(x + 5, r.y + 124, 4, g->e->dev_ok, C_GREEN);

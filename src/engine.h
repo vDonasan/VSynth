@@ -60,6 +60,8 @@ typedef struct {
     int         asio_open;      /* o dispositivo aberto é um driver ASIO */
     char        asio_error[256];
     float       dev_latency_ms; /* tamanho do buffer em ms */
+    float       bridge_ms;      /* > 0: entrada e saída em aparelhos diferentes, atraso da ponte */
+    int         force_duplex;   /* não usa a ponte mesmo com aparelhos diferentes */
     AudioDevice play[MAX_AUDIO_DEVS], cap[MAX_AUDIO_DEVS];
     int         nplay, ncap;
     atomic_int  cap_channel; /* a interface pode trocar com o áudio rodando */
