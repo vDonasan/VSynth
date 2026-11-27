@@ -413,6 +413,43 @@ void guitar_process_hop(Guitar *g, const float *hop)
     atomic_store(&g->st_note, g->tracker.current);
     atomic_store(&g->st_hz, hz);
     atomic_store(&g->st_db, db);
+    int left = atomic_load_explicit(&g->calib_left, memory_order_acquire);
+    if (left > 0) {
+        int b = (int)lroundf(db) + 120;
+        g->calib_hist[b < 0 ? 0 : (b > 120 ? 120 : b)]++;
+        atomic_store_explicit(&g->calib_left, left - 1, memory_order_release);
+    }
+}
+
+void guitar_calib_start(Guitar *g, float seconds)
+{
+    atomic_store_explicit(&g->calib_left, 0, memory_order_release);
+    memset(g->calib_hist, 0, sizeof g->calib_hist);
+    atomic_store_explicit(&g->calib_left, (int)(seconds * g->sr / PITCH_HOP), memory_order_release);
+}
+
+int guitar_calib_running(const Guitar *g)
+{
+    return atomic_load_explicit((atomic_int *)&g->calib_left, memory_order_acquire) > 0;
+}
+
+int guitar_calib_result(const Guitar *g, float *noise_db, float *gate_db)
+{
+    if (guitar_calib_running(g)) return 0;
+    unsigned total = 0, acc = 0;
+    for (int i = 0; i <= 120; i++) total += g->calib_hist[i];
+    if (!total) return 0;
+    /* percentil 70: o ruído parado é estável, e um estalo solto (que fica
+       uns 0,2 s no envelope) não puxa o gate para cima */
+    int pc = 0;
+    for (int i = 0; i <= 120; i++) {
+        acc += g->calib_hist[i];
+        if (acc >= total * 0.70f) { pc = i; break; }
+    }
+    float n = (float)pc - 120.0f, gt = n + 10.0f;
+    *noise_db = n;
+    *gate_db = gt < -70.0f ? -70.0f : (gt > -10.0f ? -10.0f : gt);
+    return 1;
 }
 
 void guitar_reset(Guitar *g)
@@ -461,6 +498,8 @@ int guitar_init(Guitar *g, float sr, EventQueue *q)
     atomic_init(&g->st_hz, -1.0f);
     atomic_init(&g->st_db, -120.0f);
     atomic_init(&g->level, 0.0f);
+    atomic_init(&g->calib_left, 0);
+    memset(g->calib_hist, 0, sizeof g->calib_hist);
     if (yin_init(&g->yin, sr, PITCH_WINDOW, PITCH_FMIN, PITCH_FMAX, PITCH_THRESHOLD) < 0) return -1;
     if (yin_init(&g->yin_short, sr, PITCH_SHORT_WINDOW, PITCH_SHORT_FMIN, PITCH_FMAX, PITCH_THRESHOLD) < 0) return -1;
     if (yin_init(&g->yin_mid, sr, PITCH_MID_WINDOW, PITCH_MID_FMIN, PITCH_FMAX, PITCH_THRESHOLD) < 0) return -1;

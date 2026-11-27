@@ -97,8 +97,8 @@ typedef struct {
     double lat_next;
 
     /* calibração do gate */
-    double calib_until;
-    float  calib_max;
+    int    calibrating;   /* esperando o resultado da medida na thread de áudio */
+    double calib_start;
 
     /* arrastar pedais */
     int   drag_fx;   /* posição (slot) sendo arrastada, -1 = nenhuma */
@@ -903,32 +903,41 @@ static void input_guitar(Gui *g, Rectangle p)
     snprintf(t, sizeof t, db < -90 ? "--" : "%.0f dB", db);
     ui_text(t, x + 36, y, 11.5f, UI_SEMIBOLD, C_TEXT);
 
-    /* calibrar: mede 3 s de cordas abafadas e põe o gate um pouco acima */
+    /* calibrar: mede 2 s da guitarra parada (dentro do áudio, a cada hop)
+       e põe o gate 10 dB acima do ruído típico */
     double now = GetTime();
     Rectangle cb = {x + w - 112, y - 6, 112, 24};
-    bool calibrating = now < g->calib_until;
     char cl[32];
-    if (calibrating) snprintf(cl, sizeof cl, "Medindo... %d", (int)ceil(g->calib_until - now));
+    if (g->calibrating) snprintf(cl, sizeof cl, "Medindo... %d", (int)ceil(2.0 - (now - g->calib_start)));
     else snprintf(cl, sizeof cl, "Calibrar gate");
-    if (ui_button(cb, cl, calibrating ? UI_BTN_AMBER : UI_BTN_NORMAL) && !calibrating) {
-        g->calib_until = now + 3.0;
-        g->calib_max = -120;
-        set_status(g, "Calibrando: deixe as cordas abafadas (sem tocar) por 3 segundos...");
-    }
-    ui_tooltip(cb, "Mede o ruído com as cordas abafadas e ajusta o gate sozinho.");
-    if (calibrating) {
-        if (db > g->calib_max) g->calib_max = db;
-    } else if (g->calib_until > 0) {
-        g->calib_until = 0;
-        char m[160];
-        if (g->calib_max < -85) {
-            param_set(P_GTR_GATE, -60);
-            snprintf(m, sizeof m, "Calibração: quase nenhum ruído. Gate em -60 dB (se não houver sinal, confira o cabo e o canal).");
-        } else {
-            param_set(P_GTR_GATE, clampf(g->calib_max + 8, -70, -10));
-            snprintf(m, sizeof m, "Calibração: ruído de %.0f dB, gate ajustado para %.0f dB.", g->calib_max, param_get(P_GTR_GATE));
+    if (ui_button(cb, cl, g->calibrating ? UI_BTN_AMBER : UI_BTN_NORMAL) && !g->calibrating) {
+        if (engine_capture_channels(e) == 0)
+            set_status(g, "Sem entrada de áudio aberta: escolha a entrada da guitarra antes de calibrar.");
+        else {
+            guitar_calib_start(&e->guitar, 2.0f);
+            g->calibrating = 1;
+            g->calib_start = now;
+            set_status(g, "Calibrando: não toque e deixe as cordas paradas por 2 segundos...");
         }
-        set_status(g, m);
+    }
+    ui_tooltip(cb, "Mede o ruído da sua interface com a guitarra parada e põe o gate 10 dB acima dele.");
+    if (g->calibrating) {
+        float noise, ng;
+        if (guitar_calib_result(&e->guitar, &noise, &ng)) {
+            g->calibrating = 0;
+            char msg[200];
+            param_set(P_GTR_GATE, ng);
+            if (noise > -25.0f)
+                snprintf(msg, sizeof msg, "Calibração: entrada muito alta (%.0f dB). Tocou durante a medida? Gate em %.0f dB; tente de novo.", noise, ng);
+            else if (noise + 10.0f < -70.0f)
+                snprintf(msg, sizeof msg, "Calibração: entrada quase sem ruído (%.0f dB). Gate no mínimo, %.0f dB: as notas soam até o fim.", noise, ng);
+            else
+                snprintf(msg, sizeof msg, "Calibração: ruído de %.0f dB, gate ajustado para %.0f dB.", noise, ng);
+            set_status(g, msg);
+        } else if (now - g->calib_start > 4.0) { /* o áudio parou no meio */
+            g->calibrating = 0;
+            set_status(g, "Calibração não terminou: a entrada de áudio parou. Confira o dispositivo.");
+        }
     }
     Rectangle m = {x, y + 18, w, 12};
     ui_meter(m, 30, clampf((db + 70) / 70, 0, 1), 0.76f, 0.9f);

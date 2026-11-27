@@ -1093,6 +1093,40 @@ static void render_demo(void)
     engine_free(&e);
 }
 
+/* Gate automático: ruído conhecido (com uns estalos soltos) -> gate 10 dB acima */
+static void test_gate_calibration(void)
+{
+    printf("Teste 1e: calibrar gate\n");
+    const float levels[3] = {-55.0f, -38.0f, -130.0f};
+    for (int k = 0; k < 3; k++) {
+        params_init();
+        Guitar g; EventQueue q; evq_init(&q);
+        guitar_init(&g, SR, &q); guitar_reset(&g);
+        guitar_calib_start(&g, 2.0f);
+        float rms = powf(10.0f, levels[k] / 20.0f), buf[PITCH_HOP];
+        rg_seed = 11;
+        int hops = 0;
+        while (guitar_calib_running(&g) && hops < 5000) {
+            for (int i = 0; i < PITCH_HOP; i++) {
+                float t = (hops * PITCH_HOP + i) / (float)SR;
+                /* zumbido de 60 Hz + chiado, no nível pedido */
+                buf[i] = rms * (1.2f * sinf(6.2831853f * 60.0f * t) + 0.6f * rg_rand());
+                if (hops % 700 == 350 && i < 8) buf[i] += 0.3f; /* dois estalos soltos */
+            }
+            guitar_process_hop(&g, buf);
+            Event e; while (evq_pop(&q, &e)) {}
+            hops++;
+        }
+        float n = 0, gt = 0;
+        int ok = guitar_calib_result(&g, &n, &gt);
+        float want = levels[k] + 10.0f < -70.0f ? -70.0f : levels[k] + 10.0f;
+        int pass = ok && fabsf(gt - want) <= 3.5f;
+        printf("  ruído %6.0f dB -> medido %6.0f dB, gate %6.0f dB (esperado %.0f) %s\n", levels[k], n, gt, want, pass ? "ok" : "ERRO");
+        CHECK(pass, "calibração do gate fora do esperado");
+        guitar_free(&g);
+    }
+}
+
 int main(void)
 {
     params_init();
@@ -1104,6 +1138,7 @@ int main(void)
     test_legato();
     test_real_guitar();
     test_direct_mode();
+    test_gate_calibration();
     test_fast_attack();
     test_fast_attack_noise();
     test_repick();

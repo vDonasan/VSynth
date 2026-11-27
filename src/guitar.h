@@ -69,13 +69,23 @@ typedef struct {
     /* lidos pela interface (afinador, medidor) e pelo motor */
     atomic_int    st_note;
     _Atomic float st_hz, st_db, level; /* level: 0..1, fonte de modulação */
+    /* calibração do gate: a thread de áudio conta o nível de cada hop num
+       histograma (1 dB por casa, de -120 a 0 dB) enquanto calib_left > 0 */
+    atomic_int    calib_left;
+    unsigned      calib_hist[121];
 } Guitar;
 
 int  guitar_init(Guitar *g, float sr, EventQueue *q);
 int  guitar_start(Guitar *g);                           /* antes de abrir o áudio */
 void guitar_stop(Guitar *g);                            /* depois de fechar o áudio */
 void guitar_free(Guitar *g);
-void guitar_reset(Guitar *g);                           /* esquece o estado (troca de entrada) */
+void guitar_reset(Guitar *g);
+/* Gate automático: mede o ruído da entrada (guitarra parada) por alguns
+   segundos. guitar_calib_result devolve 1 quando terminou, com o nível
+   típico do ruído (percentil 70, em dB) e o gate sugerido. */
+void guitar_calib_start(Guitar *g, float seconds);
+int  guitar_calib_running(const Guitar *g);
+int  guitar_calib_result(const Guitar *g, float *noise_db, float *gate_db);                           /* esquece o estado (troca de entrada) */
 /* Do callback: acumula amostras e analisa a cada PITCH_HOP. Devolve
    quantas análises rodaram (os eventos vão para a fila q). */
 int  guitar_feed(Guitar *g, const float *mono, int frames);
