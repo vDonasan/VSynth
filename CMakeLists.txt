@@ -1,6 +1,16 @@
 cmake_minimum_required(VERSION 3.16)
 project(sintetizador C)
 
+option(SYNTH_PLUGIN "Compilar o plugin CLAP (REAPER, Bitwig...)" ON)
+option(SYNTH_VST3 "Compilar também o plugin VST3 (precisa de C++)" ON)
+# as linguagens do VST3 precisam estar ligadas antes de qualquer dependência
+if(SYNTH_PLUGIN AND SYNTH_VST3)
+  enable_language(CXX)
+  if(APPLE)
+    enable_language(OBJC OBJCXX) # o clap-wrapper tem partes em Objective-C++ no Mac
+  endif()
+endif()
+
 # Baixa as dependências automaticamente na primeira configuração:
 #   raylib (janela/gráficos), miniaudio (áudio de entrada e saída),
 #   PortMidi (MIDI). Os botões/knobs são desenhados em src/ui.c.
@@ -17,7 +27,6 @@ set(FETCHCONTENT_QUIET OFF)
 
 # o núcleo também vai dentro do plugin (biblioteca dinâmica)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-option(SYNTH_PLUGIN "Compilar o plugin CLAP (REAPER, Bitwig...)" ON)
 
 # raylib sem o módulo de áudio: o áudio fica com o nosso miniaudio
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -178,12 +187,7 @@ if(SYNTH_PLUGIN)
 
   # VST3: o mesmo plugin embrulhado pelo clap-wrapper (free-audio), que
   # baixa o SDK VST3 da Steinberg (MIT). VirtualSynth.vst3
-  option(SYNTH_VST3 "Compilar também o plugin VST3 (precisa de C++)" ON)
   if(SYNTH_VST3)
-    enable_language(CXX)
-    if(APPLE)
-      enable_language(OBJC OBJCXX) # o clap-wrapper tem partes em Objective-C++ no Mac
-    endif()
     set(CMAKE_CXX_STANDARD 17)
     set(CLAP_SDK_ROOT ${clap_SOURCE_DIR})
     set(CLAP_WRAPPER_DOWNLOAD_DEPENDENCIES TRUE CACHE BOOL "" FORCE)
