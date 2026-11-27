@@ -108,7 +108,28 @@ static const ParamDef DEFS[P_COUNT] = {
     [P_MOUT_BEND] = {"midi_saida_bend", "Faixa do bend", 1, 24, 2, K_INT, "", NULL, F_NOPRESET | F_HIDDEN},
 };
 
-static _Atomic float g_values[P_COUNT];
+/* Os valores ficam num ParamSet. O app usa um só (o padrão); o plugin tem
+   um por instância e o liga na thread que está processando aquela
+   instância (params_bind), então várias instâncias convivem. */
+static ParamSet g_default;
+static _Thread_local ParamSet *g_bound = NULL;
+#define PS (g_bound ? g_bound : &g_default)
+#define g_values (PS->values)
+#define g_smooth (PS->smooth)
+#define g_smooth_ready (PS->smooth_ready)
+
+ParamSet *params_bind(ParamSet *ps)
+{
+    ParamSet *old = g_bound;
+    g_bound = ps;
+    return old;
+}
+
+void paramset_init(ParamSet *ps)
+{
+    for (int i = 0; i < P_COUNT; i++) atomic_store(&ps->values[i], DEFS[i].def);
+    ps->smooth_ready = 0;
+}
 
 const ParamDef *param_def(int id) { return (id >= 0 && id < P_COUNT) ? &DEFS[id] : NULL; }
 
@@ -202,8 +223,6 @@ void param_format(int id, char *buf, int len)
 /* ------------------------------------------------------------------ */
 /* Suavização                                                          */
 /* ------------------------------------------------------------------ */
-static float g_smooth[P_COUNT];
-static int   g_smooth_ready = 0;
 
 void params_smooth_snap(void)
 {

@@ -66,6 +66,18 @@ typedef struct {
     int         flags;
 } ParamDef;
 
+/* Conjunto de valores. O app usa o padrão; cada instância do plugin tem o
+   seu e chama params_bind(&ps) antes de usar qualquer função abaixo na
+   thread atual (devolve o que estava ligado; NULL volta ao padrão). */
+#include <stdatomic.h>
+typedef struct {
+    _Atomic float values[P_COUNT];
+    float         smooth[P_COUNT];
+    int           smooth_ready;
+} ParamSet;
+ParamSet *params_bind(ParamSet *ps);
+void      paramset_init(ParamSet *ps);
+
 void            params_init(void);           /* todos no valor padrão */
 void            params_reset_sound(void);    /* padrão, menos F_NOPRESET */
 const ParamDef *param_def(int id);

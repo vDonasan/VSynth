@@ -15,6 +15,10 @@ endif()
 include(FetchContent)
 set(FETCHCONTENT_QUIET OFF)
 
+# o núcleo também vai dentro do plugin (biblioteca dinâmica)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+option(SYNTH_PLUGIN "Compilar o plugin CLAP (REAPER, Bitwig...)" ON)
+
 # raylib sem o módulo de áudio: o áudio fica com o nosso miniaudio
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(CUSTOMIZE_BUILD ON CACHE BOOL "" FORCE)
@@ -130,6 +134,42 @@ endif()
 # No Windows (MinGW), embute as bibliotecas do compilador no .exe
 if(MINGW)
   target_link_options(synth PRIVATE -static -mwindows)
+endif()
+
+# Plugin CLAP: o mesmo motor, dentro da DAW (VirtualSynth.clap)
+if(SYNTH_PLUGIN)
+  FetchContent_Declare(clap
+    GIT_REPOSITORY https://github.com/free-audio/clap.git
+    GIT_TAG 1.2.2 GIT_SHALLOW TRUE)
+  FetchContent_Populate(clap)  # só os cabeçalhos
+  add_library(vsynth_clap MODULE src/plugin_clap.c)
+  target_include_directories(vsynth_clap PRIVATE ${clap_SOURCE_DIR}/include)
+  target_link_libraries(vsynth_clap PRIVATE synthcore)
+  set_target_properties(vsynth_clap PROPERTIES OUTPUT_NAME "VirtualSynth" PREFIX "" SUFFIX ".clap"
+                        C_VISIBILITY_PRESET hidden)
+  if(APPLE)
+    set_target_properties(vsynth_clap PROPERTIES BUNDLE TRUE BUNDLE_EXTENSION clap
+      MACOSX_BUNDLE_GUI_IDENTIFIER com.vdonasan.virtualsynth MACOSX_BUNDLE_BUNDLE_NAME VirtualSynth)
+  endif()
+  if(MINGW)
+    target_link_options(vsynth_clap PRIVATE -static -static-libgcc)
+  elseif(UNIX AND NOT APPLE)
+    target_link_options(vsynth_clap PRIVATE -Wl,--no-undefined -Wl,--version-script=${CMAKE_SOURCE_DIR}/cmake/clap.version)
+  endif()
+  if(NOT MSVC)
+    target_compile_options(vsynth_clap PRIVATE -Wall -Wextra)
+  endif()
+  # carrega o plugin como uma DAW e confere o básico
+  add_executable(test_clap_host tests/test_clap_host.c)
+  target_include_directories(test_clap_host PRIVATE ${clap_SOURCE_DIR}/include)
+  if(UNIX)
+    target_link_libraries(test_clap_host PRIVATE m ${CMAKE_DL_LIBS})
+  endif()
+  if(MINGW)
+    target_link_options(test_clap_host PRIVATE -static)
+  endif()
+  add_dependencies(test_clap_host vsynth_clap)
+  add_test(NAME clap_host COMMAND test_clap_host $<TARGET_FILE:vsynth_clap>)
 endif()
 
 # Testes (não precisam de placa de som nem de janela)
