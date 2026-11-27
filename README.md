@@ -56,9 +56,20 @@ The audio goes through REAPER's own driver (ASIO etc.), so there is no extra
 delay or device setup. Every sound parameter can be automated, the project
 saves all of them, the tempo comes from the DAW, and several instances can
 run side by side. Any sample rate works: at 88.2 kHz and up, the guitar
-analysis gets a reduced copy of the input. There is no custom editor yet: the
-DAW shows the parameters, grouped by section. The plugins pass the official
+analysis gets a reduced copy of the input. The plugins pass the official
 checkers (clap-validator and Steinberg's VST3 validator).
+
+**The plugin window is the app's own screen**: the same panels, knobs,
+presets, tuner, gate calibration, oscilloscope and clickable piano, inside
+the DAW. Only what belongs to the DAW is left out (audio devices, recording,
+looper, MIDI learn). It can be resized (16:10), follows the screen scale
+(125%, 150%...), and every knob you turn there is sent to the DAW, so
+automation recording and the DAW's own controls stay in sync. It takes the
+keyboard only while you type in a field (like a preset name), so the DAW's
+shortcuts keep working. Presets you save in the plugin go to the user data
+folder (`%APPDATA%\VirtualSynth\presets` on Windows,
+`~/Library/Application Support/Virtual Synth/presets` on macOS,
+`~/.local/share/VirtualSynth/presets` on Linux).
 
 ## Features
 
@@ -381,6 +392,9 @@ src/
   midi.c        PortMidi: input, output (guitar -> MIDI) and MIDI learn
   drift.c       bridge between two devices with different clocks
   plugin_clap.c the CLAP plugin (the VST3 wraps it with clap-wrapper)
+  plugin_gui_*.c the plugin window on Windows, macOS (.m) and Linux (X11)
+  rlsoft/       the part of raylib the interface uses, drawn in software,
+                so the plugin shows the app's screen inside the DAW
   recorder.c    WAV recording
   queue.h       lock-free queues between the threads and the audio
 tests/
